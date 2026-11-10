@@ -20,7 +20,7 @@ video/render_talk.py     Blender 4.5 batch portrait + narration renderer
 video/build_video.py    WAV → timeline → Blender single-command driver
 tests/test_timeline.py   Deterministic Python tests
 docs/M001.md             Detailed setup, limitations and acceptance gates
-.github/workflows/       Python checks on every pull request
+tools/local_check.py      Zero-credit local tests, GLB and WAV checks
 ```
 
 ### Quick start (PowerShell)
@@ -28,14 +28,18 @@ docs/M001.md             Detailed setup, limitations and acceptance gates
 Copy `our_avatar/assets/ours-photoreal.glb` to `assets/ours-photoreal.glb`. Prepare a **real spoken PCM WAV** at `assets/voice.wav`; match the text below to the audio.
 
 ```powershell
-python -m unittest discover -s tests -v
-python video/model_check.py --glb assets/ours-photoreal.glb
+python tools/local_check.py --glb assets/ours-photoreal.glb --audio assets/voice.wav --text "Welcome to Livynth. Imagination comes alive here."
+# Optional: run Python checks alone with `python tools/local_check.py`
 python video/build_video.py --glb assets/ours-photoreal.glb --audio assets/voice.wav --text "Welcome to Livynth. Imagination comes alive here." --preview
 # If output/livynth_m001.png looks correct, render the video:
 python video/build_video.py --glb assets/ours-photoreal.glb --audio assets/voice.wav --text "Welcome to Livynth. Imagination comes alive here."
 ```
 
 If Blender is not on PATH, provide `--blender "C:\\Program Files\\Blender Foundation\\Blender 4.5\\blender.exe"`. If the face is oriented away from the camera, pass `--front positive-y`.
+
+### No GitHub Actions required
+
+GitHub Actions was disabled because the account has no runner credits. Run `python tools/local_check.py` on Windows or Linux to compile, run unit tests, inspect an optional GLB, and check an optional WAV-to-timeline run. Add `--preview` to invoke Blender when installed. None of these checks use GitHub-hosted runners.
 
 ### Current validation status
 
