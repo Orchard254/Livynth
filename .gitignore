@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+output/
+*.blend1
+*.blend2
+assets/*.glb
+assets/*.wav
+assets/*.mp3
+assets/*.png
