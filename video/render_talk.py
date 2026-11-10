@@ -33,19 +33,20 @@ def bounds(meshes):
 
 def animate(meshes, frames):
     all_names = set().union(*(f['morphs'].keys() for f in frames))
-    targets, found = [], set()
+    targets, found, present = [], set(), set()
     for obj in meshes:
         keys = getattr(obj.data, 'shape_keys', None)
         if not keys:
             continue
         blocks = keys.key_blocks
+        present.update(block.name for block in blocks)
         supported = sorted(name for name in all_names if name in blocks)
         if supported:
             targets.append((blocks, supported))
             found.update(supported)
     expected = {'eyeBlinkLeft','eyeBlinkRight','jawOpen','viseme_aa'}
-    if not expected.issubset(found):
-        raise RuntimeError(f"GLB missing morph targets: {sorted(expected-found)}")
+    if not expected.issubset(present):
+        raise RuntimeError(f"GLB missing morph targets: {sorted(expected-present)}")
     for blocks, names in targets:
         for name in names:
             blocks[name].value = 0
