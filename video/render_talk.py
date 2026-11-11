@@ -93,6 +93,37 @@ def shirt_cutoff(x, z, horizontal_center, crown, height):
     return z < neckline
 
 
+def find_face_body_mesh(meshes):
+    """Find the morph-rich body mesh independently of imported object names.
+
+    Blender glTF imports can rename objects, even when glTF mesh metadata
+    reports "base.001". The full body has 67 ARKit/viseme keys; eyebrow/hair
+    meshes have fewer. Reject helpers without the essential face controls.
+    """
+    markers = {'eyeBlinkLeft', 'eyeBlinkRight', 'jawOpen', 'viseme_aa'}
+    candidates = []
+    for obj in meshes:
+        keys = getattr(getattr(obj, 'data', None), 'shape_keys', None)
+        if keys is None:
+            continue
+        names = {block.name for block in keys.key_blocks}
+        if markers.issubset(names):
+            candidates.append((len(names), obj))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
+
+
+def mesh_shape_inventory(meshes):
+    """Names and morph counts for useful diagnostics on Windows Blender."""
+    out = []
+    for obj in meshes:
+        keys = getattr(getattr(obj, 'data', None), 'shape_keys', None)
+        n = len(keys.key_blocks) if keys else 0
+        out.append(f'{obj.name} ({n} shape keys)')
+    return ', '.join(out)
+
+
 def add_preview_shirt(meshes):
     """Tint lower basemesh as a non-destructive fitted shirt.
 
@@ -101,10 +132,13 @@ def add_preview_shirt(meshes):
     """
     import bpy
     from mathutils import Vector
-    body = next((o for o in meshes if o.name == 'base.001'), None)
+    body = find_face_body_mesh(meshes)
     if body is None:
-        print('[Livynth] No base.001; wardrobe skipped')
-        return
+        raise RuntimeError(
+            'Cannot identify facial basemesh for preview wardrobe. '
+            'Imported objects: '+mesh_shape_inventory(meshes))
+    print(f'[Livynth] Preview wardrobe selected {body.name!r}; '
+          f'{len(body.data.shape_keys.key_blocks)} shape keys')
     minimum, maximum = bounds(meshes)
     h = maximum[2]-minimum[2]
     cx = (minimum[0]+maximum[0])*0.5
