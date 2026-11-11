@@ -18,10 +18,23 @@ def args_from(argv):
     p.add_argument('--audio', required=True, type=Path)
     p.add_argument('--out', required=True, type=Path)
     p.add_argument('--preview', action='store_true')
+    p.add_argument('--preview-set', action='store_true', help='Render neutral, half-blink, full-blink, smile test stills')
+    p.add_argument('--preset', choices=('studio','legacy'), default='studio')
+    p.add_argument('--preview-scale', type=int, default=50, help='Preview resolution percent: 10 to 100')
+    p.add_argument('--preview-samples', type=int, default=16)
+    p.add_argument('--final-samples', type=int, default=32)
+    p.add_argument('--max-frames', type=int, default=0, help='Limit MP4 to N frames for cheap audio smoke testing')
     p.add_argument('--front', choices=('negative-y','positive-y'), default='negative-y')
     p.add_argument('--width', type=int, default=1080)
     p.add_argument('--height', type=int, default=1920)
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    if not 10 <= args.preview_scale <= 100:
+        p.error('--preview-scale must be between 10 and 100')
+    if not 1 <= args.preview_samples <= 256 or not 1 <= args.final_samples <= 256:
+        p.error('sample counts must be between 1 and 256')
+    if args.max_frames < 0:
+        p.error('--max-frames must be >= 0')
+    return args
 
 
 def bounds(meshes):
@@ -59,21 +72,111 @@ def animate(meshes, frames):
     print(f'[Livynth] Animated {len(targets)} mesh shape-key groups, {len(found)} shapes')
 
 
-def camera_and_lights(scene, meshes, front):
+def shot_settings(height, preset):
+    """Portrait framing in fraction-of-character-height units (pure, testable)."""
+    if not 0.1 < height < 10:
+        raise ValueError('Unexpected full-body height')
+    return {'camera_drop':0.11, 'ortho_scale':0.29} if preset == 'studio' else {
+        'camera_drop':0.19, 'ortho_scale':0.48}
+
+
+def shirt_cutoff(x, z, horizontal_center, crown, height):
+    """Approximate crew-neck boundary in world Z without changing topology.
+
+    The center front neck opening is lower than the shirt at the shoulders.
+    This is a *material-only* preview garment, not cloth geometry.
+    """
+    if height <= 0:
+        raise ValueError('Height must be positive')
+    shoulder = min(1.0, abs(x-horizontal_center)/(0.22*height))
+    neckline = crown - height*(0.335 - 0.10*shoulder)
+    return z < neckline
+
+
+def add_preview_shirt(meshes):
+    """Tint lower basemesh as a non-destructive fitted shirt.
+
+    A visual QA placeholder: reassigns material per polygon, preserving all
+    faces, morph deltas, and vertex indices. Not an anatomical garment model.
+    """
+    import bpy
+    from mathutils import Vector
+    body = next((o for o in meshes if o.name == 'base.001'), None)
+    if body is None:
+        print('[Livynth] No base.001; wardrobe skipped')
+        return
+    minimum, maximum = bounds(meshes)
+    h = maximum[2]-minimum[2]
+    cx = (minimum[0]+maximum[0])*0.5
+    mat = bpy.data.materials.new('Livynth Navy Preview Shirt')
+    mat.use_nodes = True
+    bsdf = mat.node_tree.nodes.get('Principled BSDF')
+    if bsdf:
+        bsdf.inputs['Base Color'].default_value = (0.025,0.055,0.105,1.0)
+        bsdf.inputs['Roughness'].default_value = 0.88
+        bsdf.inputs['Metallic'].default_value = 0.0
+    body.data.materials.append(mat)
+    shirt_index = len(body.data.materials)-1
+    vertices = body.data.vertices
+    matrix = body.matrix_world
+    assigned = 0
+    for face in body.data.polygons:
+        # Average corner positions, not face.center (which is mesh local).
+        coords = [matrix @ vertices[idx].co for idx in face.vertices]
+        c = sum(coords,Vector((0,0,0)))/len(coords)
+        if shirt_cutoff(c.x,c.z,cx,maximum[2],h):
+            face.material_index = shirt_index
+            assigned += 1
+    print(f'[Livynth] Preview wardrobe: recolored {assigned} torso/arm polygons; no geometry changed')
+
+
+def set_test_pose(meshes, weights):
+    """Set a fixed diagnostic expression on imported Blender shape keys."""
+    names = ('eyeBlinkLeft','eyeBlinkRight','jawOpen',
+             'mouthSmileLeft','mouthSmileRight','viseme_aa')
+    for obj in meshes:
+        if not obj.data.shape_keys:
+            continue
+        blocks = obj.data.shape_keys.key_blocks
+        for name in names:
+            if name in blocks:
+                blocks[name].value = float(weights.get(name,0))
+    import bpy
+    bpy.context.view_layer.update()
+
+
+def render_preview_set(scene, meshes, out):
+    import bpy
+    poses = {
+        'neutral': {},
+        'half_blink': {'eyeBlinkLeft':0.5,'eyeBlinkRight':0.5},
+        'full_blink': {'eyeBlinkLeft':1.0,'eyeBlinkRight':1.0},
+        'smile': {'mouthSmileLeft':0.65,'mouthSmileRight':0.65}
+    }
+    scene.frame_set(1)
+    scene.render.image_settings.file_format = 'PNG'
+    for name,weights in poses.items():
+        set_test_pose(meshes,weights)
+        file = out.with_name(out.stem+'_'+name+'.png')
+        scene.render.filepath = str(file.resolve())
+        bpy.ops.render.render(write_still=True)
+        print(f'[Livynth] Rendered diagnostic {name}: {file}')
+
+
+def camera_and_lights(scene, meshes, front, preset):
     import bpy
     from mathutils import Vector
     minimum, maximum = bounds(meshes)
     h = maximum[2]-minimum[2]
-    if not 0.1 < h < 10:
-        raise RuntimeError(f'Unexpected character height {h}')
+    settings = shot_settings(h, preset)
     center = Vector(((minimum[0]+maximum[0])/2,
                      (minimum[1]+maximum[1])/2,
-                     maximum[2]-h*0.19))
+                     maximum[2]-h*settings['camera_drop']))
     cam_data = bpy.data.cameras.new('Livynth Camera')
     cam = bpy.data.objects.new('Livynth Camera', cam_data)
     scene.collection.objects.link(cam)
     cam_data.type = 'ORTHO'
-    cam_data.ortho_scale = h*0.48
+    cam_data.ortho_scale = h*settings['ortho_scale']
     toward = -1 if front == 'negative-y' else 1
     cam.location = center+Vector((0, toward*max(1.4, h*2), 0))
     cam.rotation_euler = (center-cam.location).to_track_quat('-Z','Y').to_euler()
@@ -81,10 +184,11 @@ def camera_and_lights(scene, meshes, front):
     cam_data.keyframe_insert(data_path='ortho_scale',frame=1)
     cam_data.ortho_scale *= 0.975
     cam_data.keyframe_insert(data_path='ortho_scale',frame=scene.frame_end)
+    strengths = (255,105,190) if preset == 'studio' else (450,230,390)
     for name, offset, strength, size in [
-        ('Key',(-0.8,-1.4,1.4),450,1.7),
-        ('Fill',(0.9,-1.2,0.6),230,1.9),
-        ('Rim',(0.2,0.8,0.9),390,1.1),
+        ('Key',(-0.8,-1.4,1.4),strengths[0],1.7),
+        ('Fill',(0.9,-1.2,0.6),strengths[1],1.9),
+        ('Rim',(0.2,0.8,0.9),strengths[2],1.1),
     ]:
         light=bpy.data.lights.new('Livynth '+name,'AREA')
         light.energy=strength
@@ -108,6 +212,22 @@ def camera_and_lights(scene, meshes, front):
         principled.inputs['Base Color'].default_value=(0.11,0.135,0.17,1)
         principled.inputs['Roughness'].default_value=1
     plane.data.materials.append(mat)
+    if preset == 'studio':
+        # Uniform backdrop so brightness changes do not wash out the background.
+        nodes=mat.node_tree.nodes
+        nodes.clear()
+        output=nodes.new('ShaderNodeOutputMaterial')
+        emission=nodes.new('ShaderNodeEmission')
+        emission.inputs['Color'].default_value=(0.045,0.065,0.09,1.0)
+        emission.inputs['Strength'].default_value=1.0
+        mat.node_tree.links.new(emission.outputs[0],output.inputs['Surface'])
+        scene.view_settings.exposure=-0.4
+        if scene.world:
+            scene.world.use_nodes=True
+            bg=scene.world.node_tree.nodes.get('Background')
+            if bg:
+                bg.inputs['Color'].default_value=(0.045,0.065,0.09,1)
+                bg.inputs['Strength'].default_value=0.5
 
 
 def include_narration(scene, path):
@@ -141,6 +261,8 @@ def main(args):
     if not meshes:
         raise RuntimeError('No meshes imported from GLB')
     scene.frame_start,scene.frame_end=1,len(frames)
+    if args.max_frames:
+        scene.frame_end=min(scene.frame_end,args.max_frames)
     scene.render.fps=int(timeline['fps'])
     scene.render.resolution_x=args.width
     scene.render.resolution_y=args.height
@@ -148,10 +270,22 @@ def main(args):
     scene.render.engine='BLENDER_EEVEE_NEXT' if bpy.app.version<(5,0,0) else 'BLENDER_EEVEE'
     scene.view_settings.view_transform='AgX'
     animate(meshes,frames)
-    camera_and_lights(scene,meshes,args.front)
+    if args.preset == 'studio':
+        add_preview_shirt(meshes)
+    camera_and_lights(scene,meshes,args.front,args.preset)
+    scene.eevee.taa_render_samples = (
+        args.preview_samples if args.preview or args.preview_set or args.max_frames
+        else args.final_samples
+    )
+    scene.render.resolution_percentage = args.preview_scale if (
+        args.preview or args.preview_set or args.max_frames) else 100
     args.out.parent.mkdir(parents=True,exist_ok=True)
-    if args.preview:
+    if args.preview_set:
+        render_preview_set(scene,meshes,args.out.with_suffix('.png'))
+    elif args.preview:
         scene.frame_set(1)
+        if args.preset == 'studio':
+            set_test_pose(meshes,{})
         scene.render.image_settings.file_format='PNG'
         scene.render.filepath=str(args.out.with_suffix('.png').resolve())
         bpy.ops.render.render(write_still=True)
