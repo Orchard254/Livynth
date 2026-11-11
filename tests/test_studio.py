@@ -43,6 +43,67 @@ class StudioTests(unittest.TestCase):
         self.assertNotIn('--max-frames', final.argv)
         self.assertNotEqual(smoke.artifact, final.artifact)
 
+    def test_complete_demo_reuses_character_and_audio(self):
+        tasks = self.plan('demo')
+        self.assertEqual([t.artifact.name for t in tasks],
+            ['livynth_preview.png', 'livynth_smoke.mp4', 'livynth_video.mp4'])
+        self.assertIn('--preview', tasks[0].argv)
+        self.assertIn('--max-frames', tasks[1].argv)
+        self.assertNotIn('--max-frames', tasks[2].argv)
+        for task in tasks:
+            self.assertEqual(task.argv[task.argv.index('--glb')+1], str(self.glb.resolve()))
+            self.assertEqual(task.argv[task.argv.index('--audio')+1], str(self.wav.resolve()))
+
+    def test_complete_demo_generates_character_and_voice_once(self):
+        with patch.object(studio.os, 'name', 'nt'):
+            tasks = studio.make_plan(text='Hello.', mode='demo', output_dir=self.folder,
+                blender='fake-blender', glb=None, audio=None)
+        self.assertEqual([t.kind for t in tasks], ['glb','wav','png','mp4','mp4'])
+        self.assertEqual(sum(t.kind == 'glb' for t in tasks), 1)
+        self.assertEqual(sum(t.kind == 'wav' for t in tasks), 1)
+
+    def test_complete_demo_stops_before_full_render_if_smoke_fails(self):
+        preview = self.folder / 'preview.png'
+        preview_script = ('from pathlib import Path;'
+             f'Path({str(preview)!r}).write_bytes(bytes.fromhex("89504e470d0a1a0a")+bytes(128))')
+        smoke = self.folder / 'missing.mp4'
+        final = self.folder / 'should_not_exist.txt'
+        smoke_script = 'print("simulated smoke render did not produce MP4")'
+        final_script = f'from pathlib import Path;Path({str(final)!r}).write_text("BAD")'
+        tasks = [
+            studio.Task('Preview', (sys.executable, '-c', preview_script), preview,'png'),
+            studio.Task('Smoke', (sys.executable, '-c', smoke_script), smoke,'mp4'),
+            studio.Task('Full', (sys.executable, '-c', final_script), final,'mp4'),
+        ]
+        with self.assertRaisesRegex(RuntimeError, 'expected output'):
+            studio.execute(tasks, output_dir=self.folder, log=lambda _msg: None)
+        self.assertFalse(final.exists())
+        report = json.loads((self.folder/'studio_run.json').read_text(encoding='utf-8'))
+        self.assertEqual(report['status'],'FAILED')
+        self.assertEqual(report['failed_step'],'Smoke')
+        self.assertEqual(len(report['steps']),1)
+
+    def test_video_dimensions_are_qualified(self):
+        good = self.folder / 'good.mp4'
+        def box(name, payload):
+            return (len(payload)+8).to_bytes(4, 'big') + name + payload
+        ftyp = box(b'ftyp', b'isom\0\0\0\x01isom')
+        trak = b''
+        for name in (b'vide', b'soun'):
+            hdlr = box(b'hdlr', b'\0'*8 + name + b'\0'*8)
+            tkhd = box(b'tkhd', b'\0'*12 +
+                       ((540 if name == b'vide' else 0)<<16).to_bytes(4,'big') +
+                       ((960 if name == b'vide' else 0)<<16).to_bytes(4,'big'))
+            trak += box(b'trak', tkhd + box(b'mdia', hdlr))
+        good.write_bytes(ftyp + box(b'moov', trak) + box(b'mdat', b'\x12'*200))
+        check = studio.Task('Smoke', (), good, 'mp4', (540, 960))
+        self.assertEqual(studio.check_output(check)['audio_tracks'], 1)
+        wrong = studio.Task('Full', (), good, 'mp4', (1080, 1920))
+        with self.assertRaisesRegex(RuntimeError, 'MP4 dimensions'):
+            studio.check_output(wrong)
+        self.assertEqual(self.plan('smoke')[0].expected_dimensions, (540,960))
+        self.assertEqual(self.plan('video')[0].expected_dimensions, (1080,1920))
+
     def test_reject_missing_inputs(self):
         with self.assertRaisesRegex(ValueError, 'GLB character does not exist'):
             studio.make_plan(text='hello', mode='preview', output_dir=self.folder,
