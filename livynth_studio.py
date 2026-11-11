@@ -37,6 +37,7 @@ class Task:
     argv: tuple[str, ...]
     artifact: Path
     kind: str
+    expected_dimensions: tuple[int, int] | None = None
 
 
 def find_blender(explicit='') -> str:
@@ -63,8 +64,8 @@ def find_blender(explicit='') -> str:
 
 def make_plan(*, text: str, mode: str, output_dir: Path, blender: str,
               glb: Path | None = None, audio: Path | None = None) -> list[Task]:
-    if mode not in ('preview', 'smoke', 'video'):
-        raise ValueError('Mode must be preview, smoke or video')
+    if mode not in ('preview', 'smoke', 'video', 'demo'):
+        raise ValueError('Mode must be preview, smoke, video or demo')
     if not isinstance(text, str) or not text.strip():
         raise ValueError('Please enter the words the character should say')
     if len(text) > 2000:
@@ -90,23 +91,26 @@ def make_plan(*, text: str, mode: str, output_dir: Path, blender: str,
             speech, 'wav'))
     elif not audio.is_file():
         raise ValueError(f'Voice WAV does not exist: {audio}')
-    command = [sys.executable, str(ROOT/'video/build_video.py'), '--glb', str(character),
-               '--audio', str(speech), '--text', text, '--blender', blender_path,
-               '--out', str(out / ('livynth_preview.mp4' if mode == 'preview'
-                                   else 'livynth_smoke.mp4' if mode == 'smoke'
-                                   else 'livynth_video.mp4'))]
-    if mode == 'preview':
-        command.append('--preview')
-        artifact = out / 'livynth_preview.png'
-        kind = 'png'
-    elif mode == 'smoke':
-        command.extend(['--max-frames', '30'])
-        artifact = out / 'livynth_smoke.mp4'
-        kind = 'mp4'
-    else:
-        artifact = out / 'livynth_video.mp4'
-        kind = 'mp4'
-    tasks.append(Task('Render studio ' + mode, tuple(command), artifact, kind))
+    base_command = [sys.executable, str(ROOT/'video/build_video.py'), '--glb', str(character),
+                    '--audio', str(speech), '--text', text, '--blender', blender_path]
+    # One combined demo uses the SAME generated character and voice for every
+    # step; smoke MP4 must validate before the full-length render can start.
+    render_modes = ('preview', 'smoke', 'video') if mode == 'demo' else (mode,)
+    for render_mode in render_modes:
+        if render_mode == 'preview':
+            video_out = out / 'livynth_preview.mp4'
+            artifact, kind = out / 'livynth_preview.png', 'png'
+            extra, dimensions = ['--preview'], None
+        elif render_mode == 'smoke':
+            video_out = out / 'livynth_smoke.mp4'
+            artifact, kind = video_out, 'mp4'
+            extra, dimensions = ['--max-frames', '30'], (540, 960)
+        else:
+            video_out = out / 'livynth_video.mp4'
+            artifact, kind = video_out, 'mp4'
+            extra, dimensions = [], (1080, 1920)
+        tasks.append(Task('Render studio ' + render_mode,
+            tuple(base_command + ['--out', str(video_out)] + extra), artifact, kind, dimensions))
     return tasks
 
 
@@ -136,7 +140,13 @@ def check_output(task: Task):
                 raise RuntimeError('Preview file is not a PNG')
     elif task.kind == 'mp4':
         from video.mp4_probe import inspect_mp4
-        return inspect_mp4(p)
+        audit = inspect_mp4(p)
+        if task.expected_dimensions is not None:
+            measured = (audit['first_video_width'], audit['first_video_height'])
+            if measured != task.expected_dimensions:
+                raise RuntimeError(f'MP4 dimensions {measured} do not match expected '
+                                   f'{task.expected_dimensions}: {p}')
+        return audit
 
 
 def execute(tasks: list[Task], *, output_dir: Path, log, stop=None):
@@ -155,6 +165,7 @@ def execute(tasks: list[Task], *, output_dir: Path, log, stop=None):
             if stop is not None and stop.is_set():
                 raise InterruptedError('Studio task canceled before starting')
             log(f'\n[LIVYNTH] {task.title}\n')
+            start_time = time.monotonic()
             proc = subprocess.Popen(task.argv, cwd=str(ROOT), stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT, text=True, errors='replace',
                                     bufsize=1)
@@ -197,14 +208,20 @@ def execute(tasks: list[Task], *, output_dir: Path, log, stop=None):
             if task.kind == 'mp4':
                 report['video_audio_stream'] = 'TRACKS_PRESENT_UNVERIFIED_PLAYBACK'
                 report['mp4_tracks'] = audit
-            report['steps'].append({'name': task.title, 'status': 'PASS_ARTIFACT',
-                                    'output': str(task.artifact)})
+            completed = {'name': task.title, 'status': 'PASS_ARTIFACT',
+                         'output': str(task.artifact),
+                         'elapsed_s': round(time.monotonic() - start_time, 2)}
+            if task.kind == 'mp4':
+                completed['container_audit'] = audit
+            report['steps'].append(completed)
             log(f'[LIVYNTH] Saved: {task.artifact}\n')
         report['status'] = 'PASS_ARTIFACTS_NOT_IDENTITY'
         return report
     except Exception as exc:
         report['status'] = 'CANCELED' if isinstance(exc, InterruptedError) else 'FAILED'
         report['error'] = str(exc)
+        if 'task' in locals():
+            report['failed_step'] = task.title
         raise
     finally:
         final_path.write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
@@ -294,7 +311,7 @@ def launch_gui():
             except Exception as exc:
                 updates.put(('error', str(exc)))
         threading.Thread(target=worker, daemon=True).start()
-    for label, mode in [('1. Preview portrait', 'preview'), ('2. Test 1-sec video', 'smoke'), ('3. Export full MP4', 'video')]:
+    for label, mode in [('1. Preview portrait', 'preview'), ('2. Test 1-sec video', 'smoke'), ('3. Export full MP4', 'video'), ('4. Build complete demo (recommended)', 'demo')]:
         b = ttk.Button(controls, text=label, command=lambda m=mode: start(m))
         b.pack(side='left', padx=(0,8))
         buttons.append(b)
@@ -333,7 +350,7 @@ def launch_gui():
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--mode', choices=('preview','smoke','video'), default='preview')
+    parser.add_argument('--mode', choices=('preview','smoke','video','demo'), default='preview')
     parser.add_argument('--text', default=DEFAULT_TEXT)
     parser.add_argument('--glb', help='Existing character GLB; omitted = MPFB neutral character')
     parser.add_argument('--audio', help='Existing PCM WAV; omitted = Windows local speech')
