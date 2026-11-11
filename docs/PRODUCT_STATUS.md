@@ -33,6 +33,10 @@ python livynth_studio.py --cli --mode demo --text "Welcome to LIVYNTH."
 
 Windows GUI: `Start_LIVYNTH_Studio.bat` then **Build complete demo (recommended)**.
 
+## STUDIO-004 narrator strip compatibility fix (2026-11-12)
+
+Found a Blender 4.5 Python API hazard in `video/render_talk.py`: the first `Scene.sequence_editor.strips` collection is valid but empty, so treating it with `x or editor.sequences` can wrongly report that sound strips are unavailable. Patched with explicit `None` detection and a legacy fallback. Four synthetic tests reproduce the original failure and verify the corrected collection handling. **Actual Blender 4.5 integration and audible exported MP4 remain UNVERIFIED.**
+
 ## Explicit next acceptance gates
 
 1. **Owner Windows integrated smoke**: open the Studio, inspect actual neutral PNG, render a 30-frame MP4 and confirm it visually plays with audible speech; save `studio_run.json` and Blender diagnostics. Fail any stage that is black, visually incorrect, silent, or crashes. Repeat with `--mode demo` before release.

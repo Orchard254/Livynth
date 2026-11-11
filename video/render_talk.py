@@ -271,7 +271,12 @@ def camera_and_lights(scene, meshes, front, preset):
 
 def include_narration(scene, path):
     editor=scene.sequence_editor_create()
-    strips=getattr(editor,'strips',None) or getattr(editor,'sequences',None)
+    # The Blender 4.5 SequenceEditor.strips collection is empty before the
+    # first sound is inserted. An empty bpy_prop_collection can be false-y,
+    # so never use `or` here: it mistakes a valid empty collection for None.
+    strips=getattr(editor,'strips',None)
+    if strips is None:  # Blender versions exposing the older API
+        strips=getattr(editor,'sequences',None)
     if strips is None:
         raise RuntimeError('Blender sequence editor missing strips collection')
     sound=strips.new_sound('Livynth Voice',str(path.resolve()),channel=1,frame_start=1)
