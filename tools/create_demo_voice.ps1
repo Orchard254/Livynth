@@ -35,5 +35,13 @@ try {
 Set-Content -LiteralPath $transcriptPath -Value $VoiceText -NoNewline -Encoding UTF8
 Write-Host "Created audio: $wavPath"
 Write-Host "Created transcript: $transcriptPath"
-& python -c 'import wave,sys; w=wave.open(sys.argv[1], "rb"); print("WAV duration: %.2f seconds; %d channels; %d Hz" % (w.getnframes()/w.getframerate(),w.getnchannels(),w.getframerate())); w.close()' $wavPath
-if ($LASTEXITCODE -ne 0) { throw 'WAV validation failed. Check your Python installation.' }
+# Avoid "python -c": nested PowerShell-to-native quoting strips Python string
+# quotes on some Windows configurations. Invoke our actual WAV/timeline checker
+# by filename and pass all user-provided text as normal arguments.
+$timelineScript = Join-Path $repo 'video\make_timeline.py'
+$timelinePath = Join-Path $repo 'output\demo_voice_timeline.json'
+& python $timelineScript --audio $wavPath --text $VoiceText --out $timelinePath
+if ($LASTEXITCODE -ne 0) {
+    throw "WAV/timeline validation failed. Audio was saved at: $wavPath"
+}
+Write-Host "Validated voice timeline: $timelinePath"
