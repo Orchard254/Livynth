@@ -275,10 +275,18 @@ def build_wireframe_copy():
 
 
 def set_wire_visible(visible):
+    """Show only the wireframe twins (during the wireframe pass) or only the
+    real meshes (afterwards).
+
+    The wireframe pass renders the twins alone, so the real meshes must be
+    hidden ONLY for the duration of that pass.  The previous implementation set
+    `meshes` hide_render=True as well, permanently hiding the candidate for
+    every subsequent view in the session (all following renders were empty).
+    """
     for o in wire_objs:
         o.hide_render = not visible
     for o in meshes:
-        o.hide_render = not visible
+        o.hide_render = visible
 
 
 manifest = {
@@ -351,6 +359,14 @@ for name in VIEWS:
             print("[gate-render] textured pass failed:", repr(exc))
         set_material("clay")
 
+    bcols = np.nonzero(blender_mask.any(axis=0))[0]
+    brows = np.nonzero(blender_mask.any(axis=1))[0]
+    if bcols.size == 0 or brows.size == 0:
+        raise RuntimeError(
+            "view %s: Blender alpha is empty (all-transparent render at psi=%.1f); "
+            "the candidate would be invisible to every reviewer. Refusing to write "
+            "a partial manifest. Check camera, lights, material and hide_render state."
+            % (name, psi))
     ys, xs = np.nonzero(rast_mask)
     rast_bbox = [float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max())] if len(xs) else None
     manifest["views"][name] = {
@@ -364,10 +380,10 @@ for name in VIEWS:
         "camera_position_model": [-math.sin(math.radians(psi)), 0.0, math.cos(math.radians(psi))],
         "analytic_bbox_px": analytic,
         "raster_bbox_px": rast_bbox,
-        "blender_alpha_bbox_px": [float(np.nonzero(blender_mask.any(axis=0))[0].min()),
-                                  float(np.nonzero(blender_mask.any(axis=1))[0].min()),
-                                  float(np.nonzero(blender_mask.any(axis=0))[0].max()),
-                                  float(np.nonzero(blender_mask.any(axis=1))[0].max())],
+        "blender_alpha_bbox_px": [float(bcols.min()),
+                                  float(brows.min()),
+                                  float(bcols.max()),
+                                  float(brows.max())],
         "raster_vs_blender_mask_iou": mask_iou,
         "depth_range_m": [float(np.nanmin(rast["depth"][rast_mask])) if rast_mask.any() else None,
                           float(np.nanmax(rast["depth"][rast_mask])) if rast_mask.any() else None],

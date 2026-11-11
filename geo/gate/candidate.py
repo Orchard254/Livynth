@@ -98,9 +98,16 @@ def fit_cameras(cand, ref, view_names):
 
 def render_candidate(glb_path, calib_path, out_dir, views, blender=BLENDER,
                      passes="clay,wire,wireframe,textured", samples=8):
-    """One Blender run producing every geometry evidence image."""
+    """One Blender run producing every geometry evidence image.
+
+    Blender exits 0 even when the python script raises, so rc is NOT proof of
+    a complete render.  We verify the manifest exists, covers every requested
+    view and that the requested passes produced files; otherwise the caller
+    must treat the render as failed and refuse to build the blind bundle.
+    """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    requested_passes = [p.strip() for p in passes.split(",") if p.strip()]
     cmd = [blender, "--background", "--factory-startup",
            "--python", str(GATE_DIR / "blender_render.py"), "--",
            "--glb", str(glb_path), "--out", str(out_dir),
@@ -111,8 +118,33 @@ def render_candidate(glb_path, calib_path, out_dir, views, blender=BLENDER,
     res = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
     log = out_dir / "blender_render.log"
     log.write_text(res.stdout + "\n--- STDERR ---\n" + res.stderr, encoding="utf-8")
+    problems = []
+    manifest_path = out_dir / "render_manifest.json"
+    if not manifest_path.exists():
+        problems.append("render_manifest.json was not written (blender script died before completing)")
+    else:
+        try:
+            man = json.loads(manifest_path.read_text(encoding="utf-8"))
+            done = set(man.get("views_done", []))
+            missing_views = [v for v in views if v not in done]
+            if missing_views:
+                problems.append("manifest is missing views: %s" % ",".join(missing_views))
+        except Exception as exc:  # noqa: BLE001 - report, don't crash the gate
+            problems.append("render_manifest.json unreadable: %r" % exc)
+    expected = ["clay_%s.png" % v for v in views]
+    for p in requested_passes:
+        if p == "wire":
+            expected += ["wire_%s.png" % v for v in views]
+        elif p == "wireframe":
+            expected += ["wireframe_%s.png" % v for v in views]
+        elif p == "textured":
+            expected += ["textured_%s.png" % v for v in views]
+    for rel in expected:
+        if not (out_dir / rel).exists():
+            problems.append("missing render file: %s" % rel)
     return {"returncode": res.returncode, "log": str(log),
-            "tail": (res.stdout or "")[-2000:]}
+            "tail": (res.stdout or "")[-2000:],
+            "problems": problems, "ok": not problems}
 
 
 def _grey_background(rgba, colour=(150, 150, 152)):

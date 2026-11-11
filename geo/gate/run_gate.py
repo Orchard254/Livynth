@@ -91,10 +91,17 @@ def evaluate_candidate(name, glb_path, ref, rects, out_dir, fh, do_controls=True
         % (name, calib["views"]["front"]["scale_ratio_vs_reference"]), fh)
     render_dir = out_dir / "renders"
     if reuse and (render_dir / "render_manifest.json").exists():
-        res = {"returncode": 0, "log": str(render_dir), "tail": "reused", "reused": True}
+        res = {"returncode": 0, "log": str(render_dir), "tail": "reused", "reused": True,
+               "problems": [], "ok": True}
     else:
         res = candidate.render_candidate(glb_path, calib_path, render_dir, VIEWS)
     log("candidate %s: blender rc=%s" % (name, res["returncode"]), fh)
+    if not res.get("ok", False):
+        problems = res.get("problems", ["render verification failed"])
+        log("candidate %s: RENDER INCOMPLETE: %s" % (name, "; ".join(problems)), fh)
+        raise RuntimeError(
+            "candidate %s: render incomplete, refusing to build a blind bundle "
+            "from partial evidence: %s" % (name, "; ".join(problems)))
     renders = candidate.load_renders(render_dir, VIEWS)
     textured_rgb = None
     tp = render_dir / "textured_front.png"
@@ -133,8 +140,14 @@ def evaluate_candidate(name, glb_path, ref, rects, out_dir, fh, do_controls=True
             ccalib_path.write_text(json.dumps(ccalib, indent=2) + "\n", encoding="utf-8")
             crender = cdir / "renders"
             if not (reuse and (crender / "render_manifest.json").exists()):
-                candidate.render_candidate(cglb, ccalib_path, crender,
-                                          CONTROL_VIEWS, passes="clay,textured")
+                cresult = candidate.render_candidate(cglb, ccalib_path, crender,
+                                                     CONTROL_VIEWS, passes="clay,textured")
+                if not cresult.get("ok", False):
+                    log("candidate %s: control %s render INCOMPLETE: %s"
+                        % (name, spec["kind"], "; ".join(cresult.get("problems", []))), fh)
+                    raise RuntimeError(
+                        "candidate %s: control %s render incomplete: %s"
+                        % (name, spec["kind"], "; ".join(cresult.get("problems", []))))
             crenders = candidate.load_renders(crender, CONTROL_VIEWS)
             ctex = None
             ctp = crender / "textured_front.png"
