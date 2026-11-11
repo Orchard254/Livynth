@@ -14,21 +14,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from geo import visual_hull as vh  # noqa: E402
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-SRC_IMAGES = REPO_ROOT / "assets" / "characters" / "character_001" / "identity_capture_v1"
-
-# The carve needs scipy (morphology) and scikit-image (marching cubes); they are
-# listed in requirements-hull.txt. Tests that need them skip rather than fail
-# when only requirements-geometry.txt is installed.
-try:
-    import scipy.ndimage  # noqa: F401
-    import skimage.measure  # noqa: F401
-    HULL_DEPS = True
-except ImportError:  # pragma: no cover - depends on the install
-    HULL_DEPS = False
-
-requires_hull_deps = unittest.skipUnless(
-    HULL_DEPS, "hull dependencies missing (pip install -r requirements-hull.txt)")
+SRC_IMAGES = Path(r"C:\PROJECT\Livynth\assets\characters\character_001\identity_capture_v1")
 
 
 class TestSegmentation(unittest.TestCase):
@@ -100,7 +86,6 @@ class TestProjection(unittest.TestCase):
 
 
 class TestCarvingSphere(unittest.TestCase):
-    @requires_hull_deps
     def test_sphere_hull_volume(self):
         """6 orthogonal circle silhouettes of a sphere -> hull within 20% of true volume."""
         R = 0.09
@@ -149,32 +134,67 @@ class TestCarvingSphere(unittest.TestCase):
 
 
 class TestExportGlb(unittest.TestCase):
-    def test_textured_glb_roundtrip(self):
-        import trimesh
+    def _tiny_images(self):
         from PIL import Image
+        return {
+            "front": Image.new("RGB", (1086, 1448), (205, 150, 112)),
+            "left45": Image.new("RGB", (1086, 1448), (180, 120, 80)),
+            "right45": Image.new("RGB", (1086, 1448), (220, 170, 130)),
+            "left90": Image.new("RGB", (1086, 1448), (90, 40, 12)),
+            "right90": Image.new("RGB", (1086, 1448), (40, 18, 5)),
+            "back": Image.new("RGB", (1086, 1448), (54, 18, 3)),
+            "top": Image.new("RGB", (1087, 1447), (120, 70, 40)),
+        }
+
+    def _all_view_params(self, images):
+        vp_all = {}
+        for name, img in images.items():
+            v = dict(vh.VIEWS[name])
+            if v.get("top"):
+                vp_all[name] = dict(s=4000.0, cx=543.5, cy=720.0, phi=None, top=True, dilate=0)
+            else:
+                vp_all[name] = dict(s=3500.0, cx=img.size[0] / 2.0, cy=img.size[1] / 2.0,
+                                    phi=float(v.get("phi") or 0.0), top=False, dilate=0)
+        return vp_all
+
+    def test_textured_glb_roundtrip(self):
+        """A2-style export: one welded component, COLOR_0 vertex colours, no atlas image."""
+        import trimesh
+        import numpy as np
         mesh = trimesh.creation.icosphere(subdivisions=2, radius=0.08)
-        mesh.vertices[:] += np.array([0.0, 0.0, 0.0])
-        images = {"front": Image.new("RGB", (1086, 1448), (205, 150, 112)),
-                  "top": Image.new("RGB", (1087, 1447), (120, 70, 40))}
-        vp_front = dict(s=3500.0, cx=543.0, cy=700.0, phi=0.0, top=False, dilate=0)
-        vp_top = dict(s=4000.0, cx=543.5, cy=720.0, phi=None, top=True, dilate=0)
+        images = self._tiny_images()
+        vp_all = self._all_view_params(images)
         with tempfile.TemporaryDirectory() as td:
             out = Path(td) / "tiny.glb"
-            vh.export_glb(mesh, images, {"front": vp_front, "top": vp_top}, out)
+            vh.export_glb(mesh, images, vp_all, out)
             self.assertTrue(out.is_file())
             loaded = trimesh.load(out, force="mesh")
             self.assertGreater(len(loaded.vertices), 0)
             self.assertGreater(len(loaded.faces), 0)
-            self.assertIsNotNone(loaded.visual.material.baseColorTexture)
+            self.assertTrue(hasattr(loaded.visual, "vertex_colors") or
+                            (getattr(loaded.visual, "kind", None) == "vertex_color"))
+            self.assertEqual(len(loaded.vertices), len(np.unique(loaded.vertices, axis=0)),
+                             "vertices must be position-welded (single indexed shell)")
+            self.assertEqual(len(loaded.split(only_watertight=False)), 1,
+                             "exported mesh must be exactly ONE connected component")
+            bare = trimesh.Trimesh(vertices=loaded.vertices, faces=loaded.faces, process=True)
+            self.assertTrue(bool(bare.is_watertight), "position-welded mesh must be watertight")
+            self.assertEqual(int(bare.euler_number), 2)
 
-    @unittest.skipUnless((Path.cwd() / "output/character001_visual_hull/character001_visual_hull.glb").is_file(),
-                         "final candidate GLB not present")
+    @unittest.skipUnless((Path.cwd() / "output/a2_repair/character001_visual_hull.glb").is_file(),
+                         "A2 repair candidate GLB not present")
     def test_final_candidate_glb_loads(self):
         import trimesh
-        m = trimesh.load("output/character001_visual_hull/character001_visual_hull.glb", force="mesh")
+        m = trimesh.load("output/a2_repair/character001_visual_hull.glb", force="mesh")
         self.assertGreater(len(m.faces), 10_000)
         self.assertLess(float(np.abs(m.extents).max()), 0.5,
                         "candidate exceeds sane human-scale bounds")
+        # REPAIR 1 regression gate: exactly ONE connected component, watertight after position weld
+        self.assertEqual(len(m.split(only_watertight=False)), 1,
+                         "candidate must be a single connected shell (no UV-seam split)")
+        bare = trimesh.Trimesh(vertices=m.vertices, faces=m.faces, process=True)
+        self.assertTrue(bool(bare.is_watertight))
+        self.assertEqual(len(np.unique(m.vertices, axis=0)), len(m.vertices))
 
 
 if __name__ == "__main__":

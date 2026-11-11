@@ -111,11 +111,37 @@ def place_camera(phi_deg, s, cx, cy, dist=2.0, yaw_sign=1.0):
     cam_data.shift_y = (cy - H / 2.0) / L
 
 
+# --- optional --signs <json>: render only the sign resolved by pick_render_signs.py
+# (per view "+"/"-") and drop the probe_ prefix/suffix; used for the A1 vs A2
+# comparison package where one image per candidate is required.
+signs_path = arg("--signs")
+prefix = arg("--prefix", "probe")
+signs = {}
+if signs_path:
+    signs = json.loads(Path(signs_path).read_text(encoding="utf-8"))
+    print("[signs] using per-view signs from", signs_path)
+
 for name, c in calib.items():
     if only_views and name not in only_views.split(","):
         continue
     if c.get("top"):
         continue  # top view is rendered separately (camera looks down)
+    if signs:
+        sign = 1.0 if signs.get(name, {}).get("sign", "+") == "+" else -1.0
+        place_camera(c["phi"], c["s"], c["cx"], c["cy"], yaw_sign=sign)
+        scene.render.filepath = str(out_dir / f"{prefix}_{name}.png")
+        bpy.ops.render.render(write_still=True)
+        manifest["views"][name] = {
+            "s": c["s"],
+            "cx": c["cx"],
+            "cy": c["cy"],
+            "phi": c["phi"],
+            "sign": "+" if sign > 0 else "-",
+            "ortho_scale": L / c["s"],
+            "shift_x": (c["cx"] - W / 2.0) / L,
+            "shift_y": (H / 2.0 - c["cy"]) / L,
+        }
+        continue
     for sign in (1.0, -1.0):
         place_camera(c["phi"], c["s"], c["cx"], c["cy"], yaw_sign=sign)
         scene.render.filepath = str(out_dir / f"probe_{name}_{'p' if sign > 0 else 'n'}.png")

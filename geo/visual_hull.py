@@ -4,7 +4,7 @@
 Classical, deterministic, local reconstruction candidate. Carves a voxel grid
 against weak-perspective silhouettes segmented from the 15-pose reference set
 (front/±45/±90/back/top are used), triangulates with marching cubes and bakes
-a planar-projected photo texture atlas.
+a planar-projected photo albedo into COLOR_0 vertex colours (no atlas).
 
 THIS IS NOT A FACE SCAN AND NOT A LIKENESS SOLUTION. It recovers an approximate
 head/hair/neck volume only. Eyes, lips, wrinkles, skin microdetail, correct
@@ -64,9 +64,24 @@ VIEWS = {
     "right45":dict(file="03_subject_right_45.png",phi=45,  crown=42, chin=None, scale=None),
     "left90": dict(file="04_left_profile.png",   phi=-90, crown=40, chin=980, scale=None),
     "right90":dict(file="05_right_profile.png",  phi=90,  crown=34, chin=940, scale=None),
-    "back":   dict(file="06_back_head.png",      phi=180, crown=19, chin=None, scale=None),
+    # Back view: s/cx/cy were resolved by a joint sweep against the final metric
+    # (output/repair2_sweep.json, key "sweep", best candidate (3866, 555, 465.5)),
+    # NOT inherited from the front view any more. The back photo is framed ~8%
+    # tighter than the front; inheriting the front scale shaved the posterior
+    # cranium and produced the smeared profile posteriors. The value is a
+    # measured ASSUMPTION fit (in-sample), recorded as such — not an independent
+    # calibration.
+    "back":   dict(file="06_back_head.png",      phi=180, crown=19, chin=None, scale=3866.0,
+                   cx=555.0, cy=465.5),
     "top":    dict(file="07_top_head.png",       phi=None, top=True, crown=None, chin=None, scale=None),
 }
+# Yaw sign of each reference photo relative to the carve's projection
+# convention, resolved empirically by tools/pick_render_signs.py (run 1,
+# 2026-11-11): front '+', left45 '+', right45 '+', left90 '+', right90 '+',
+# back '-'. The carve's Ry(psi) and the photo cameras' yaws have opposite
+# sign for the back view.
+YAW_SIGNS = {"front": 1.0, "left45": 1.0, "right45": 1.0, "left90": 1.0,
+             "right90": 1.0, "back": -1.0, "top": 1.0}
 TOP_DEFAULTS = dict(s=4680.0, cx=543.5, cy=723.5)  # fitted, see report; ASSUMPTION
 FRONT_FALLBACK_SCALE = (924 - 55) / HEAD_HEIGHT_M  # 3547.1 px/m
 
@@ -128,10 +143,16 @@ def view_params(view: dict, w: int, h: int, front_scale: float) -> dict:
     if view["chin"] is not None and view["crown"] is not None:
         s = (view["chin"] - view["crown"]) / HEAD_HEIGHT_M
     else:
-        s = front_scale
+        s = view.get("scale") or front_scale
     crown = view["crown"]
-    cy = crown + s * (HEAD_HEIGHT_M / 2.0)   # row of world y=0
-    return dict(s=float(s), cx=w / 2.0, cy=float(cy), phi=float(view["phi"]), top=False,
+    # Explicit cx/cy win over derived values (used for the back view, whose
+    # calibration was measured by a carve-sweep rather than derived from the
+    # front view's framing).
+    cx = view.get("cx", w / 2.0)
+    cy = view.get("cy")
+    if cy is None:
+        cy = crown + s * (HEAD_HEIGHT_M / 2.0)   # row of world y=0
+    return dict(s=float(s), cx=float(cx), cy=float(cy), phi=float(view["phi"]), top=False,
                 dilate=view.get("dilate", MASK_DILATE_PX))
 
 
@@ -204,18 +225,22 @@ _CELL_POS = {"front": (0, 0), "back": (1, 0), "left45": (2, 0), "right45": (3, 0
              "left90": (0, 1), "right90": (1, 1), "top": (2, 1)}
 
 
-def cam_dir(vp: dict) -> np.ndarray:
+def cam_dir(vp: dict, view_name: str | None = None) -> np.ndarray:
     """Unit direction from the object toward the camera, in neutral world coords.
 
     Camera is fixed at +z; the head is yawed by psi for the view, so the only
     faces visible in the photo are those whose world normal n satisfies
     dot(Ry(psi) n, (0,0,1)) > 0, i.e. dot(n, Ry(-psi) zhat) > 0, with
-    Ry(-psi) zhat = (-sin psi, 0, cos psi).
+    Ry(-psi) zhat = (-sign*sin psi, 0, cos psi) where `sign` is the view's
+    measured yaw sign (YAW_SIGNS — the photos' yaw convention differs from the
+    carve's; using Ry(psi) uncorrected assigned the wrong hemisphere and had
+    to be resolved empirically per view).
     """
     if vp["top"]:
         return np.array([0.0, 1.0, 0.0])
+    sign = YAW_SIGNS.get(view_name, 1.0) if view_name else 1.0
     psi = math.radians(vp["phi"])
-    return np.array([-math.sin(psi), 0.0, math.cos(psi)])
+    return np.array([-sign * math.sin(psi), 0.0, math.cos(psi)])
 
 
 def build_atlas(images: dict[str, Image.Image]) -> Image.Image:
@@ -229,115 +254,137 @@ def build_atlas(images: dict[str, Image.Image]) -> Image.Image:
     return atlas
 
 
-def texture_face_soup(mesh, images, vp_all):
-    """Assign each face to the view whose camera direction best matches the face
-    normal, then project its three corners to that view's atlas cell.
+def srgb_to_linear(c: np.ndarray) -> np.ndarray:
+    """sRGB 0..255 bytes -> linear 0..1 floats (glTF COLOR_0 is linear)."""
+    c = np.clip(c, 0, 255) / 255.0
+    return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
 
-    Returns (vertices, faces/corner-uvs, atlas_image) as a per-face-soup mesh.
+
+def vertex_colours(mesh, images, vp_all):
+    """Assign each face to the view whose sign-corrected camera direction best
+    matches the face normal, then bilinear-sample that photo at each vertex.
+
+    Returns (soup_vertices, soup_colours uint8 (N,3), soup_src corner->vertex
+    indices into the welded mesh) as a per-face triangle soup.
     """
-    import trimesh
+    import trimesh  # noqa: F401  (symmetry with the previous implementation)
 
     faces = mesh.faces
-    vnormals = mesh.vertex_normals       # smooth, per-corner
     verts = mesh.vertices
-    # Texture assignment uses ONLY the two reliable identity anchors (front + back
-    # photos).  Mixing the +/-45 and +/-90 photos into the albedo produced a visible
-    # double-exposure of the face (their projections shift the sampled facial pixels
-    # laterally), so geometry still uses all seven views while albedo stays clean.
-    TEXTURE_VIEWS = ("front", "back")
-    dirs = {k: cam_dir(vp_all[k]) for k in TEXTURE_VIEWS if k in vp_all}
+    # View assignment uses every view (not just front/back) with the MEASURED
+    # yaw sign per view (YAW_SIGNS): the photos' yaw convention differs from
+    # the carve's, so an uncorrected assignment sampled mirrored facial pixels
+    # onto the wrong hemisphere — that was the 'profile face smear' defect.
+    dirs = {k: cam_dir(vp_all[k], k) for k in VIEW_ORDER if k in vp_all}
     keys = list(dirs)
     D = np.stack([dirs[k] for k in keys])          # (V,3)
-    fnormals = mesh.face_normals                    # (F,3), outward (watertight hull)
+    fnormals = mesh.face_normals                    # (F,3), outward (closed hull)
     weights = fnormals @ D.T                        # (F,V)
+    # Bias the two pole views to own their hemispheres: the front/back photos
+    # are the reliable identity anchors; pure argmax splits the face into a
+    # double-exposure seam.
+    for vi, k in enumerate(keys):
+        if k == "front":
+            weights[:, vi] += 0.35
+        elif k == "back":
+            weights[:, vi] += 0.35
     assign = weights.argmax(axis=1)                 # (F,)
 
-    atlas = build_atlas(images)
-    aw, ah = atlas.size
+    arrs = {k: np.asarray(images[k].convert("RGB"), dtype=np.float32) for k in keys}
+    src_sizes = {k: images[k].size for k in keys}  # (w,h)
+
     soup_v = np.empty((len(faces) * 3, 3), dtype=np.float64)
-    soup_uv = np.empty((len(faces) * 3, 2), dtype=np.float64)
-    corner_normals = np.empty((len(faces) * 3, 3), dtype=np.float64)
-    src_sizes = {k: images[k].size for k in images}  # (w,h)
+    soup_c = np.empty((len(faces) * 3, 3), dtype=np.float64)
+    soup_src = np.empty(len(faces) * 3, dtype=np.int64)
 
-    for vi, k in enumerate(keys):
-        idx = np.flatnonzero(assign == vi)
-        if len(idx) == 0:
-            continue
-        vp = vp_all[k]
-        vv = verts[faces[idx].reshape(-1)].reshape(len(idx), 3, 3)
-        u, v = project_points(vv.reshape(-1, 3), vp)
-        sw, sh = src_sizes[k]
-        # to atlas px
-        col, row = _CELL_POS[k]
-        u_cell = col * ATLAS_CELL + u / sw * ATLAS_CELL
-        v_cell = row * ATLAS_CELL + v / sh * ATLAS_CELL
-        uv = np.stack([u_cell / aw, 1.0 - v_cell / ah], axis=1).reshape(len(idx), 3, 2)
-        soup_v[idx * 3] = vv[:, 0]
-        soup_v[idx * 3 + 1] = vv[:, 1]
-        soup_v[idx * 3 + 2] = vv[:, 2]
-        soup_uv.reshape(len(faces), 3, 2)[idx] = uv
-        # smooth corner normals from the welded mesh
-        corner = np.stack([vnormals[faces[idx][:, 0]], vnormals[faces[idx][:, 1]], vnormals[faces[idx][:, 2]]], axis=1)
-        corner_normals.reshape(len(faces), 3, 3)[idx] = corner
-
-    soup_faces = np.arange(len(soup_v), dtype=np.int64).reshape(-1, 3)
-    soup_src = np.empty(len(soup_v), dtype=np.int64)
     for vi, k in enumerate(keys):
         idx = np.flatnonzero(assign == vi)
         if len(idx) == 0:
             continue
         f = faces[idx]
+        vv = verts[f.reshape(-1)].reshape(len(idx), 3, 3)
+        u, v = project_points(vv.reshape(-1, 3), vp_all[k])
+        sw, sh = src_sizes[k]
+        u = np.clip(u, 0, sw - 1.001)
+        v = np.clip(v, 0, sh - 1.001)
+        x0 = u.astype(np.int64)
+        y0 = v.astype(np.int64)
+        x1, y1 = x0 + 1, y0 + 1
+        dx = (u - x0)[:, None]
+        dy = (v - y0)[:, None]
+        arr = arrs[k]
+        c00 = arr[y0, x0]
+        c01 = arr[y0, x1]
+        c10 = arr[y1, x0]
+        c11 = arr[y1, x1]
+        col = (c00 * (1 - dx) * (1 - dy) + c01 * dx * (1 - dy)
+               + c10 * (1 - dx) * dy + c11 * dx * dy)
+        soup_v[idx * 3] = vv[:, 0]
+        soup_v[idx * 3 + 1] = vv[:, 1]
+        soup_v[idx * 3 + 2] = vv[:, 2]
         soup_src[idx * 3] = f[:, 0]
         soup_src[idx * 3 + 1] = f[:, 1]
         soup_src[idx * 3 + 2] = f[:, 2]
-    soup = trimesh.Trimesh(vertices=soup_v, faces=soup_faces, vertex_normals=corner_normals, process=False)
-    return soup, soup_uv, atlas, soup_src
+        # sRGB photo bytes -> linear 0..1 (glTF COLOR_0 is linear; Blender's
+        # importer treats the attribute as linear and would wash the albedo
+        # out if stored as sRGB).
+        col_lin = srgb_to_linear(col)
+        soup_c[idx * 3] = col_lin[0::3]
+        soup_c[idx * 3 + 1] = col_lin[1::3]
+        soup_c[idx * 3 + 2] = col_lin[2::3]
+
+    return soup_v, soup_c, soup_src
 
 
 def export_glb(mesh, images, vp_all, path: Path):
-    """Export a watertight, indexed GLB with a projected texture.
+    """Export one connected, closed mesh with COLOR_0 vertex-colour albedo.
 
-    The per-face soup carries one vertex per corner, which destroys edge sharing
-    (exported mesh was non-watertight and ~6x inflated). We weld by
-    (position, uv) instead: vertices are shared everywhere except at UV seams,
-    which is the standard glTF layout. Position-only welding must reproduce the
-    closed carve, so the export asserts that explicitly.
+    The previous build welded by (position, uv), which guaranteed connectivity
+    everywhere except across the front/back albedo seam; the two hemispheres
+    then shared no index and the artifact QA measured two large "shells" plus
+    48 shards (rendered as the translucent ghost layer). This build welded by
+    POSITION ALONE: every position has exactly one vertex, index connectivity
+    is universal, and the exported GLB is closed by every measure.
+
+    Albedo is sampled per vertex (averaged over faces when positions collide),
+    which trades sub-texel detail for a single manifold surface — the right
+    trade for a diagnostic candidate.
     """
     import trimesh
 
-    soup, uv, atlas, src = texture_face_soup(mesh, images, vp_all)
-    comb = np.concatenate([np.asarray(soup.vertices), uv], axis=1)
-    uniq, inv = np.unique(comb, axis=0, return_inverse=True)
-    new_v = np.ascontiguousarray(uniq[:, :3])
-    new_uv = np.ascontiguousarray(uniq[:, 3:5])
+    soup_v, soup_c, soup_src = vertex_colours(mesh, images, vp_all)
+    uniq, inv = np.unique(np.ascontiguousarray(soup_v), axis=0, return_inverse=True)
+    new_v = np.ascontiguousarray(uniq)
     new_f = np.ascontiguousarray(inv.reshape(-1, 3).astype(np.int64))
 
-    # Smooth vertex normals: average the per-corner smooth normals inside each weld group.
-    corner_n = np.asarray(mesh.vertex_normals)[src]
-    acc = np.zeros((len(uniq), 3), dtype=np.float64)
-    np.add.at(acc, inv, corner_n)
+    # Average vertex colours inside each weld group (positions shared across the
+    # albedo seam receive mean colour; there are no uv-specific vertices).
     cnt = np.bincount(inv, minlength=len(uniq)).astype(np.float64)[:, None]
-    new_n = acc / np.maximum(cnt, 1.0)
+    acc = np.zeros((len(uniq), 3), dtype=np.float64)
+    np.add.at(acc, inv, soup_c)
+    new_c = np.clip(acc / cnt, 0.0, 1.0)  # linear 0..1 (glTF COLOR_0)
 
-    # Integrity check on the geometry only (position welding): the carve must be closed.
+    # Smooth vertex normals: average the per-corner normals inside each weld group.
+    corner_n = np.asarray(mesh.vertex_normals)[soup_src]
+    acc_n = np.zeros((len(uniq), 3), dtype=np.float64)
+    np.add.at(acc_n, inv, corner_n)
+    new_n = acc_n / cnt
+
+    # Integrity check: position welding must reproduce the closed carve exactly.
     bare = trimesh.Trimesh(vertices=new_v, faces=new_f, process=True)
     watertight = bool(bare.is_watertight)
+    comps = len(bare.split(only_watertight=False))
     print(f"[export] welded mesh: {len(new_v)} verts / {len(new_f)} faces; "
-          f"position-weld watertight={watertight} euler={bare.euler_number}")
-    if not watertight:
+          f"components={comps}; position-weld watertight={watertight} euler={bare.euler_number}")
+    if not watertight or comps != 1:
         raise RuntimeError(
-            "export aborted: carved hull is not closed after position welding "
-            f"(euler={bare.euler_number}); refusing to ship a non-watertight candidate"
+            "export aborted: carved hull is not ONE closed shell after position welding "
+            f"(components={comps}, euler={bare.euler_number}); refusing to ship a "
+            "candidate whose artifact QA cannot pass"
         )
 
-    material = trimesh.visual.material.PBRMaterial(
-        name="character001_visual_hull",
-        baseColorTexture=atlas,
-        metallicFactor=0.0,
-        roughnessFactor=0.85,
-    )
     welded = trimesh.Trimesh(vertices=new_v, faces=new_f, vertex_normals=new_n, process=False)
-    welded.visual = trimesh.visual.TextureVisuals(uv=new_uv, material=material, image=atlas)
+    welded.visual = trimesh.visual.ColorVisuals(vertex_colors=new_c)
     scene = trimesh.Scene(welded)
     scene.export(str(path))
     return welded
@@ -474,6 +521,30 @@ def run(image_dir: Path, out_dir: Path, views: list[str], top_override: dict | N
         mesh.export(glb_path)
         print(f"[export] {glb_path} (no texture)")
 
+    # --- artifact QA: reload the exported GLB and record the MEASURED stats
+    glb_stats = None
+    if not skip_texture:
+        import trimesh
+        loaded = trimesh.load(glb_path, force="mesh")
+        bare = trimesh.Trimesh(vertices=np.asarray(loaded.vertices).copy(),
+                               faces=np.asarray(loaded.faces).copy(), process=True)
+        glb_stats = {
+            "vertices": int(len(loaded.vertices)),
+            "faces": int(len(loaded.faces)),
+            "volume_m3": float(abs(loaded.volume)),
+            "extents_m": [float(x) for x in loaded.extents],
+            "bounds_m": [[float(x) for x in b] for b in loaded.bounds],
+            "watertight": bool(loaded.is_watertight),
+            "components": int(len(loaded.split(only_watertight=False))),
+            "position_weld_watertight": bool(bare.is_watertight),
+            "position_weld_euler": int(bare.euler_number),
+            "degenerate_faces": int((loaded.area_faces == 0).sum()),
+            "vertex_colors": bool(getattr(getattr(loaded.visual, "vertex_colors", None), "shape", None) is not None),
+        }
+        print(f"[qa] GLB reload: v={glb_stats['vertices']} f={glb_stats['faces']} "
+              f"watertight={glb_stats['watertight']} components={glb_stats['components']} "
+              f"euler={glb_stats['position_weld_euler']} degenerate={glb_stats['degenerate_faces']}")
+
     # --- evaluation: silhouette IoU per view (unoptimized, vs raw masks)
     ious = {}
     for name, fg in masks.items():
@@ -509,14 +580,24 @@ def run(image_dir: Path, out_dir: Path, views: list[str], top_override: dict | N
             "extents_m": [float(x) for x in mesh.extents],
             "bounds_m": [[float(x) for x in b] for b in mesh.bounds],
         },
+        "glb_artifact_qa": glb_stats,
+        "texture": {
+            "type": "COLOR_0 vertex colours (bilinear-sampled per face from the best-scoring view)",
+            "views_used": sorted(active),
+            "yaw_signs": YAW_SIGNS,
+            "front_back_pole_bias": 0.35,
+            "note": "single position-welded shell; no atlas image embedded; colors sampled from the"
+                    " signed projection of each face's corners; front/back views carry +0.35 score"
+                    " bias to keep the identity anchors double-exposure-safe",
+        },
+        "head_iou_style_note": "silhouette IoU uses unoptimized polygon rasterisation vs the raw reference masks",
         "silhouette_iou_unoptimized": ious,
         "elapsed_s": round(time.time() - t0, 2),
         "known_failure_modes": [
-            "AI-generated references are uncalibrated; cameras assumed weak-perspective, same distance class per framing tier",
-            "Back view distance differs from front (wider framing); scale fitted separately, may still bias carve",
-            "Top view principal point/scale ASSUMED (sweep-fitted); carving against it is unverified",
-            "Visual hull cannot recover eyes, nose detail, lips, sockets, ears canal detail, hair curls",
-            "Texture is planar projection; seams appear where faces switch contributing view",
+            "AI-generated references are uncalibrated; cameras assumed weak-perspective, same distance class per framing tier (back view: in-sample sweep fit, not an independent calibration)",
+            "Texture is planar projection into COLOR_0 vertex colours; per-vertex colours cannot reproduce sub-face detail or hair strands",
+            "Hard seams appear where faces switch contributing view (front<->45, profile<->back)",
+            "Any photo whose silhouette differs from the hull smears across the seam regions",
             "Silhouette includes hair volume; hull is head+hair, not skull",
         ],
         "glb_file": "character001_visual_hull.glb",
