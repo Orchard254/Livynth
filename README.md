@@ -25,6 +25,20 @@ tools/local_check.py      Zero-credit local tests, GLB and WAV checks
 
 ### Quick start (PowerShell)
 
+For Windows PowerShell with Blender installed but not on PATH, first run:
+
+```powershell
+git pull
+powershell -ExecutionPolicy Bypass -File .\\tools\\create_demo_voice.ps1
+$script = (Get-Content .\\assets\\voice_transcript.txt -Raw).Trim()
+python tools/local_check.py --glb .\\assets\\ours-photoreal.glb --audio .\\assets\\voice.wav --text $script --preview
+```
+
+The demo-voice helper uses Windows System.Speech, creates a matching transcript and WAV, and reports the actual duration. The local test command auto-detects Blender in `C:\\Program Files\\Blender Foundation\\Blender *\\blender.exe`; alternatively specify `--blender "C:\\Program Files\\Blender Foundation\\Blender 4.5\\blender.exe"`.
+
+**If the demo voice is unavailable:** copy `livynth_demo_voice.wav` from the previously distributed smoke kit to `assets\\voice.wav` and use that kit's transcript. The demo is synthetic speech for pipeline testing, not final-quality narration.
+
+
 Copy `our_avatar/assets/ours-photoreal.glb` to `assets/ours-photoreal.glb`. Prepare a **real spoken PCM WAV** at `assets/voice.wav`; match the text below to the audio.
 
 ```powershell
