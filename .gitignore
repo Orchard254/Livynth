@@ -1,0 +1,44 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+output/
+*.blend1
+*.blend2
+assets/*.glb
+assets/*.wav
+assets/*.mp3
+assets/*.png
+# Keep generated reference photos and character assets out of Git history
+assets/characters/**
+
+# --- Worktree-local virtualenvs (e.g. .venv-landmarks) ---
+.venv*/
+venv/
+env/
+
+# --- Vendored third-party clones: re-creatable, never committed ---
+# tools/triposr/ is a nested git clone; adding it would create a broken gitlink.
+/tools/triposr/
+
+# --- Model weights and downloaded model bundles: re-fetch via tools/fetch_*.py ---
+*.ckpt
+*.pth
+*.pt
+*.onnx
+*.safetensors
+*.bin
+*.task
+models/
+
+# --- Generated geometry: never committed (tools/branch_audit.py enforces this) ---
+*.glb
+*.gltf
+*.fbx
+*.obj
+*.blend
+
+# --- Logs and local environment ---
+*.log
+logs/
+.env

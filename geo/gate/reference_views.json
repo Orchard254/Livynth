@@ -1,0 +1,97 @@
+{
+  "schema": "livynth.c001.gate.reference-views.v1",
+  "reference_dir": "C:/PROJECT/Livynth/assets/characters/character_001/identity_capture_v1",
+  "image_size_px": [
+    1086,
+    1448
+  ],
+  "provenance": {
+    "s_cx_cy": "Per-view scale (px per metre) and principal point fitted to the segmentation of each reference photograph during the C001-GEO-03 lane. They are DATA about the photographs, not code, and are re-used here only so that a candidate render and the matching photograph share one pixel frame.",
+    "phi": "Nominal camera azimuth in the gate convention (see geo/gate/camera.py). The LEFT/RIGHT sign is resolved EMPIRICALLY at run time by clay-silhouette IoU against the reference photograph; both signs and the chosen one are recorded in the render manifest.",
+    "no_ground_truth": "The reference photographs are AI-generated, carry no EXIF and no intrinsics. There is no true 3D ground truth for the subject. Depth/normal consistency is therefore a plausibility gate only.",
+    "crown_chin_rows": "Manual annotation of the crown and chin rows of each reference photograph (the C001-GEO-03 lane annotation).  The chin row of the 45 degree views is estimated from the front view head height scaled by that view's scale. The SAME rows are used on the candidate clay renders, because the candidate renders and the photographs share one pixel frame."
+  },
+  "views": {
+    "front": {
+      "file": "01_subject_front.png",
+      "phi": 0.0,
+      "s": 3546.9387755102043,
+      "cx": 543.0,
+      "cy": 489.5,
+      "crown_row": 55,
+      "chin_row": 924
+    },
+    "left45": {
+      "file": "02_subject_left_45.png",
+      "phi": -45.0,
+      "s": 3546.9387755102043,
+      "cx": 543.0,
+      "cy": 487.5,
+      "crown_row": 53,
+      "chin_row": null
+    },
+    "right45": {
+      "file": "03_subject_right_45.png",
+      "phi": 45.0,
+      "s": 3546.9387755102043,
+      "cx": 543.0,
+      "cy": 476.5,
+      "crown_row": 42,
+      "chin_row": null
+    },
+    "left90": {
+      "file": "04_left_profile.png",
+      "phi": -90.0,
+      "s": 3836.7346938775513,
+      "cx": 543.0,
+      "cy": 510.0,
+      "crown_row": 40,
+      "chin_row": 980
+    },
+    "right90": {
+      "file": "05_right_profile.png",
+      "phi": 90.0,
+      "s": 3697.9591836734694,
+      "cx": 543.0,
+      "cy": 487.0,
+      "crown_row": 34,
+      "chin_row": 940
+    },
+    "back": {
+      "file": "06_back_head.png",
+      "phi": 180.0,
+      "s": 3546.9387755102043,
+      "cx": 543.0,
+      "cy": 453.5,
+      "crown_row": 19,
+      "chin_row": null
+    }
+  },
+  "reference_landmarks_front_px": {
+    "note": "Manual visual estimate carried over from geo/character001_landmarks.json. Uncalibrated: use ratios only.",
+    "eyes": {
+      "left": [
+        444,
+        526
+      ],
+      "right": [
+        656,
+        525
+      ]
+    },
+    "chin": [
+      549,
+      925
+    ],
+    "mouth_corners": [
+      [
+        466,
+        762
+      ],
+      [
+        630,
+        762
+      ]
+    ]
+  }
+}
