@@ -141,7 +141,12 @@ def set_test_pose(meshes, weights):
         for name in names:
             if name in blocks:
                 blocks[name].value = float(weights.get(name,0))
+                # Replace the frame-one key deliberately; this prevents
+                # animation evaluation from restoring the original expression
+                # when Blender starts each still render.
+                blocks[name].keyframe_insert(data_path='value',frame=1)
     import bpy
+    bpy.context.scene.frame_set(1)
     bpy.context.view_layer.update()
 
 
