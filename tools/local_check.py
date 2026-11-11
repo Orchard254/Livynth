@@ -47,6 +47,11 @@ def check(args):
 
     run([sys.executable, '-m', 'compileall', '-q', 'video', 'tests', 'tools'])
     run([sys.executable, '-m', 'unittest', 'discover', '-s', 'tests', '-v'])
+    # The geometry suites live in sibling packages under geo/ (geo/tests,
+    # geo/tests_hull, geo/tests_landmarks, geo/tests_calibration). Discovering
+    # from `geo` with the repository root as top-level finds every one of them;
+    # discovering from `geo/tests` alone silently covered only the core suite.
+    run([sys.executable, '-m', 'unittest', 'discover', '-s', 'geo', '-t', '.', '-p', 'test_*.py'])
 
     if args.glb:
         glb = args.glb.resolve()

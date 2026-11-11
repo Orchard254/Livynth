@@ -1,0 +1,15 @@
+# Dependencies for the multi-view visual hull pipeline (geo/visual_hull.py).
+#
+# The core geometry suite (geo/tests) only needs numpy, Pillow and trimesh --
+# see requirements-geometry.txt. The visual hull additionally uses scipy for
+# morphological operations and scikit-image for marching cubes.
+#
+#   python -m pip install -r requirements-hull.txt
+#
+# fast-simplification is optional: without it the carve keeps the full triangle
+# count instead of decimating, which is slower but not wrong.
+numpy>=1.26
+Pillow>=10
+trimesh>=4.0
+scipy>=1.11
+scikit-image>=0.22
