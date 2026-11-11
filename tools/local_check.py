@@ -68,12 +68,13 @@ def check(args):
             raise RuntimeError('Animation includes out-of-range weights')
         print(f"[livynth local] {len(data['frames'])} animation frames verified")
 
-    if args.preview:
+    if args.preview or args.preview_set:
         if not args.glb or not args.audio:
             raise ValueError('--preview requires both --glb and --audio')
         run([sys.executable, 'video/build_video.py',
              '--glb', args.glb.resolve(), '--audio', args.audio.resolve(),
-             '--text', args.text, '--blender', find_blender(args.blender), '--preview'])
+             '--text', args.text, '--blender', find_blender(args.blender),
+             '--preview-set' if args.preview_set else '--preview'])
 
     print('\n[livynth local] PASS — all requested local checks completed')
 
@@ -83,7 +84,8 @@ def main():
     parser.add_argument('--glb', type=Path, help='Optional GLB to verify')
     parser.add_argument('--audio', type=Path, help='Optional real or test PCM WAV')
     parser.add_argument('--text', default='Welcome to Livynth. Imagination comes alive here.')
-    parser.add_argument('--preview', action='store_true', help='Also render a preview with Blender')
+    parser.add_argument('--preview', action='store_true', help='Render one neutral preview with Blender')
+    parser.add_argument('--preview-set', action='store_true', help='Render four diagnostic stills in Blender')
     parser.add_argument('--blender', default='blender', help='Blender executable path for --preview')
     args = parser.parse_args()
     try:
