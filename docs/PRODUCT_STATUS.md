@@ -37,6 +37,10 @@ Windows GUI: `Start_LIVYNTH_Studio.bat` then **Build complete demo (recommended)
 
 Found a Blender 4.5 Python API hazard in `video/render_talk.py`: the first `Scene.sequence_editor.strips` collection is valid but empty, so treating it with `x or editor.sequences` can wrongly report that sound strips are unavailable. Patched with explicit `None` detection and a legacy fallback. Four synthetic tests reproduce the original failure and verify the corrected collection handling. **Actual Blender 4.5 integration and audible exported MP4 remain UNVERIFIED.**
 
+## STUDIO-005 narration signal QA (2026-11-12)
+
+A pre-render blocker was identified: previously a supplied PCM WAV containing complete silence was accepted merely because it existed, and a generated WAV was checked only for its frame count. The new `video/wav_qa.py` refuses effectively silent or malformed files before any Blender rendering starts; generated WAV checks and previously supplied WAV checks share the same implementation. The studio run manifest records measurable audio signal QA. The equivalent local standard-library Studio/MP4/WAV test harness passes **38/38** synthetic tests, including failure injection that proves no render subprocess starts for silence. The **real owner Windows Blender MP4 and audible speech gate remain UNVERIFIED**. Audio activity does not prove phoneme correctness or playback.
+
 ## Explicit next acceptance gates
 
 1. **Owner Windows integrated smoke**: open the Studio, inspect actual neutral PNG, render a 30-frame MP4 and confirm it visually plays with audible speech; save `studio_run.json` and Blender diagnostics. Fail any stage that is black, visually incorrect, silent, or crashes. Repeat with `--mode demo` before release.
