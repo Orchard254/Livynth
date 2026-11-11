@@ -1,5 +1,7 @@
 """Offline Studio orchestration tests (not Blender rendering tests)."""
 import json
+import math
+import struct
 import sys
 import tempfile
 import unittest
@@ -21,7 +23,7 @@ class StudioTests(unittest.TestCase):
         self.wav = self.folder / 'voice.wav'
         with wave.open(str(self.wav), 'wb') as f:
             f.setnchannels(1);f.setsampwidth(2);f.setframerate(16000)
-            f.writeframes(b'\0\0' * 16000)
+            f.writeframes(b''.join(struct.pack('<h',int(9000*math.sin(2*math.pi*220*i/16000))) for i in range(16000)))
 
     def plan(self, mode='preview'):
         return studio.make_plan(text='Hello from Studio.', mode=mode, output_dir=self.folder,
@@ -104,6 +106,50 @@ class StudioTests(unittest.TestCase):
         self.assertEqual(self.plan('smoke')[0].expected_dimensions, (540,960))
         self.assertEqual(self.plan('video')[0].expected_dimensions, (1080,1920))
 
+    def test_reject_existing_silent_audio_before_render(self):
+        silent = self.folder/'silent.wav'
+        with wave.open(str(silent), 'wb') as f:
+            f.setnchannels(1); f.setsampwidth(2); f.setframerate(16000)
+            f.writeframes(b'\0\0' * 16000)
+        with self.assertRaisesRegex(ValueError, 'E_WAV_NO_MEANINGFUL_SIGNAL'):
+            studio.make_plan(text='hello', mode='video', output_dir=self.folder,
+                             blender='fake-blender', glb=self.glb, audio=silent)
+
+    def test_reject_generated_silent_audio_after_synthesis(self):
+        silent = self.folder/'silent.wav'
+        with wave.open(str(silent), 'wb') as f:
+            f.setnchannels(1); f.setsampwidth(2); f.setframerate(16000)
+            f.writeframes(b'\0\0' * 16000)
+        with self.assertRaisesRegex(ValueError, 'E_WAV_NO_MEANINGFUL_SIGNAL'):
+            studio.check_output(studio.Task('Voice', (), silent, 'wav'))
+
+    def test_execution_preflight_records_existing_narration_signal(self):
+        output = self.folder / 'preview.png'
+        script = ('from pathlib import Path;'
+                  f'Path({str(output)!r}).write_bytes(bytes.fromhex("89504e470d0a1a0a")+bytes(128))')
+        task = studio.Task('Render studio preview',
+            (sys.executable, '-c', script, '--audio', str(self.wav)), output, 'png')
+        report = studio.execute([task], output_dir=self.folder, log=lambda _m: None)
+        self.assertEqual(report['narration_signal']['status'], 'PASS_SIGNAL_NOT_SPEECH_QUALITY')
+        stored = json.loads((self.folder / 'studio_run.json').read_text(encoding='utf-8'))
+        self.assertGreater(stored['narration_signal']['active_signal_s'], 0.12)
+
+    def test_execution_preflight_blocks_silent_narration_before_render(self):
+        silent = self.folder / 'silent.wav'
+        with wave.open(str(silent), 'wb') as f:
+            f.setnchannels(1); f.setsampwidth(2); f.setframerate(16000)
+            f.writeframes(b'\0\0' * 16000)
+        output = self.folder / 'should_not_exist.png'
+        script = f'from pathlib import Path;Path({str(output)!r}).write_bytes(b"bad")'
+        task = studio.Task('Render studio preview',
+            (sys.executable, '-c', script, '--audio', str(silent)), output, 'png')
+        with self.assertRaisesRegex(ValueError, 'E_WAV_NO_MEANINGFUL_SIGNAL'):
+            studio.execute([task], output_dir=self.folder, log=lambda _m: None)
+        self.assertFalse(output.exists())
+        report = json.loads((self.folder/'studio_run.json').read_text(encoding='utf-8'))
+        self.assertEqual(report['status'], 'FAILED')
+        self.assertEqual(report['failed_step'], 'Render studio preview')
+
     def test_reject_missing_inputs(self):
         with self.assertRaisesRegex(ValueError, 'GLB character does not exist'):
             studio.make_plan(text='hello', mode='preview', output_dir=self.folder,
@@ -126,7 +172,8 @@ class StudioTests(unittest.TestCase):
                              blender='fake', glb=self.glb, audio=None)
 
     def test_accept_pcm_wav(self):
-        studio.check_output(studio.Task('Voice', (), self.wav, 'wav'))
+        audit = studio.check_output(studio.Task('Voice', (), self.wav, 'wav'))
+        self.assertEqual(audit['status'], 'PASS_SIGNAL_NOT_SPEECH_QUALITY')
 
     def test_reject_fake_mp4(self):
         p=self.folder/'fake.mp4';p.write_bytes(b'not mp4'*30)
