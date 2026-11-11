@@ -91,6 +91,10 @@ def make_plan(*, text: str, mode: str, output_dir: Path, blender: str,
             speech, 'wav'))
     elif not audio.is_file():
         raise ValueError(f'Voice WAV does not exist: {audio}')
+    else:
+        # Existing audio must not bypass narration signal validation.
+        from video.wav_qa import inspect_narration_wav
+        inspect_narration_wav(speech)
     base_command = [sys.executable, str(ROOT/'video/build_video.py'), '--glb', str(character),
                     '--audio', str(speech), '--text', text, '--blender', blender_path]
     # One combined demo uses the SAME generated character and voice for every
@@ -131,9 +135,8 @@ def check_output(task: Task):
         if audit.get('joint_count') != 163 or audit.get('morph_targets_in_exported_glb') != 67:
             raise RuntimeError('Neutral character lost required joints/morphs')
     elif task.kind == 'wav':
-        with wave.open(str(p), 'rb') as f:
-            if f.getnframes() < 100 or f.getframerate() <= 0:
-                raise RuntimeError('Speech file is empty')
+        from video.wav_qa import inspect_narration_wav
+        return inspect_narration_wav(p)
     elif task.kind == 'png':
         with p.open('rb') as f:
             if f.read(8) != b'\x89PNG\r\n\x1a\n':
@@ -164,6 +167,12 @@ def execute(tasks: list[Task], *, output_dir: Path, log, stop=None):
         for task in tasks:
             if stop is not None and stop.is_set():
                 raise InterruptedError('Studio task canceled before starting')
+            # Check audible-signal potential before any Blender render, and
+            # include input metadata even when the WAV was supplied externally.
+            if task.kind in ('png', 'mp4') and '--audio' in task.argv and 'narration_signal' not in report:
+                from video.wav_qa import inspect_narration_wav
+                audio_path = Path(task.argv[task.argv.index('--audio') + 1])
+                report['narration_signal'] = inspect_narration_wav(audio_path)
             log(f'\n[LIVYNTH] {task.title}\n')
             start_time = time.monotonic()
             proc = subprocess.Popen(task.argv, cwd=str(ROOT), stdout=subprocess.PIPE,
@@ -213,6 +222,8 @@ def execute(tasks: list[Task], *, output_dir: Path, log, stop=None):
                          'elapsed_s': round(time.monotonic() - start_time, 2)}
             if task.kind == 'mp4':
                 completed['container_audit'] = audit
+            if task.kind == 'wav':
+                completed['audio_signal_audit'] = audit
             report['steps'].append(completed)
             log(f'[LIVYNTH] Saved: {task.artifact}\n')
         report['status'] = 'PASS_ARTIFACTS_NOT_IDENTITY'
