@@ -4,11 +4,13 @@
 
 ## What the owner can do
 
-After updating the experimental LIVYNTH branch, **double-click `Start_LIVYNTH_Studio.bat`** in the repository folder. The Studio provides a basic Windows window with a text script, optional files for an existing GLB and WAV, an optional Blender path, and three actions:
+After updating the experimental LIVYNTH branch, **double-click `Start_LIVYNTH_Studio.bat`** in the repository folder. The Studio provides a basic Windows window with a text script, optional files for an existing GLB and WAV, an optional Blender path, and four actions:
 
 1. **Preview portrait** — generate a local neutral MPFB rigged character if no GLB was selected, generate Windows test narration if no WAV was selected, build a timeline and render one 50%-scale PNG preview.
 2. **Test 1-sec video** — produce one 30-frame MP4 smoke artifact, to avoid spending time on a full 420-frame run before the renderer is proven.
-3. **Export full MP4** — Blender renders the whole timeline (default 1080x1920, 30 fps) and attempts to embed the narration. This requires the preview/smoke to be visually and audibly checked first. The runner checks MP4 container integrity, presence of separate video and audio tracks, and recorded video dimensions. This is NOT a listening, lip-sync, or image-quality test.
+3. **Export full MP4** — Blender renders the whole timeline (default 1080x1920, 30 fps) and attempts to embed the narration. This requires the preview/smoke to be visually and audibly checked first. The runner checks MP4 container integrity, presence of separate video and audio tracks, and recorded video dimensions (540×960 for smoke, 1080×1920 for final). This is NOT a listening, lip-sync, or image-quality test.
+
+4. **Build complete demo (recommended)** — generate the rigged neutral character and narration once, render one preview PNG, validate the 30-frame smoke MP4 and only then render the full MP4. If any earlier stage fails, the full render is blocked. The per-step manifest includes time and MP4 track diagnostics.
 
 The existing `video/build_video.py` and `video/render_talk.py` remain the production back end. Assets are created in `output/studio/YYYYMMDD_HHMMSS_microseconds/` and are ignored by Git. The desktop interface doesn't upload files or call paid services. Creating a neutral human requires Blender 4.5 + MPFB extension installed in the user's Blender profile; built-in Windows voice requires Windows PowerShell 5.1 and System.Speech. An existing GLB/WAV can bypass either generation step.
 
@@ -22,7 +24,9 @@ A production run writes `studio_run.json` that says `PASS_ARTIFACTS_NOT_IDENTITY
 - A locally generated FFmpeg H.264/AAC sample was independently verified by the MP4 parser in the authoring environment. This is **not** a Blender smoke-test result.
 - On owner's Windows PC: open the Studio; create a neutral character, visually review the portrait and 1-second MP4 with audio. Do not mark M001 finished until one full 12-15-second video is produced and listened to.
 
-CLI optional: `python livynth_studio.py --cli --mode smoke --text "Welcome to Livynth"`.
+CLI optional: `python livynth_studio.py --cli --mode demo --text "Welcome to Livynth"`.
+
+**Remaining acceptance requirement:** the full Windows/Blender session must be run and the MP4 must be visually reviewed and listened to. Structural MP4 audio-track presence cannot prove audible speech or correct lip-sync. Character 001 likeness remains unapproved.
 
 ## Unfinished final-product requirements
 
