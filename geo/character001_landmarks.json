@@ -1,0 +1,16 @@
+{
+  "schema": "livynth.c001.reference-landmarks.v1",
+  "source_image": "01_subject_front.png",
+  "source_dimensions_px": [1086, 1448],
+  "annotation_method": "manual visual estimate; uncalibrated AI portrait",
+  "eyes": {
+    "left": [444, 526],
+    "right": [656, 525]
+  },
+  "chin": [549, 925],
+  "mouth_corners": [
+    [466, 762],
+    [630, 762]
+  ],
+  "interpretation": "Only ratios and conservative fitting hints; not ground-truth anatomical positions"
+}
