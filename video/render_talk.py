@@ -76,8 +76,20 @@ def shot_settings(height, preset):
     """Portrait framing in fraction-of-character-height units (pure, testable)."""
     if not 0.1 < height < 10:
         raise ValueError('Unexpected full-body height')
-    return {'camera_drop':0.11, 'ortho_scale':0.29} if preset == 'studio' else {
+    # Review of actual 540x960 smoke frames: prior crop placed the crown at
+    # y~110 but left the face small, with excessive chest filling the portrait.
+    # Reduce ortho scale and raise the aim to keep the crown from clipping.
+    # This is a diagnostic shot; confirm on Windows before a full render.
+    return {'camera_drop':0.06, 'ortho_scale':0.215} if preset == 'studio' else {
         'camera_drop':0.19, 'ortho_scale':0.48}
+
+
+def studio_palette():
+    """Diagnostic clay/garment colors only; not Character 001 texture/identity."""
+    return {
+        'skin': (0.59, 0.40, 0.32, 1.0),
+        'shirt': (0.025, 0.055, 0.105, 1.0),
+    }
 
 
 def shirt_cutoff(x, z, horizontal_center, crown, height):
@@ -142,26 +154,44 @@ def add_preview_shirt(meshes):
     minimum, maximum = bounds(meshes)
     h = maximum[2]-minimum[2]
     cx = (minimum[0]+maximum[0])*0.5
-    mat = bpy.data.materials.new('Livynth Navy Preview Shirt')
-    mat.use_nodes = True
-    bsdf = mat.node_tree.nodes.get('Principled BSDF')
-    if bsdf:
-        bsdf.inputs['Base Color'].default_value = (0.025,0.055,0.105,1.0)
-        bsdf.inputs['Roughness'].default_value = 0.88
-        bsdf.inputs['Metallic'].default_value = 0.0
-    body.data.materials.append(mat)
-    shirt_index = len(body.data.materials)-1
+    # The neutral MPFB export arrives with near-uniform dark-blue material.
+    # Assign distinct warm clay and navy shirt material on this imported copy
+    # so geometry, mouth motion and neckline remain visible for diagnosis.
+    # No textures or likeness are implied and the original GLB is untouched.
+    palette = studio_palette()
+    indexes = {}
+    for role, label, roughness in (
+        ('skin', 'Livynth Neutral Skin Clay', 0.72),
+        ('shirt', 'Livynth Navy Preview Shirt', 0.88),
+    ):
+        mat = bpy.data.materials.new(label)
+        mat.use_nodes = True
+        mat.diffuse_color = palette[role]
+        bsdf = mat.node_tree.nodes.get('Principled BSDF')
+        if bsdf:
+            bsdf.inputs['Base Color'].default_value = palette[role]
+            bsdf.inputs['Roughness'].default_value = roughness
+            bsdf.inputs['Metallic'].default_value = 0.0
+        body.data.materials.append(mat)
+        indexes[role] = len(body.data.materials)-1
     vertices = body.data.vertices
     matrix = body.matrix_world
     assigned = 0
+    clay_faces = 0
     for face in body.data.polygons:
         # Average corner positions, not face.center (which is mesh local).
         coords = [matrix @ vertices[idx].co for idx in face.vertices]
         c = sum(coords,Vector((0,0,0)))/len(coords)
         if shirt_cutoff(c.x,c.z,cx,maximum[2],h):
-            face.material_index = shirt_index
+            face.material_index = indexes['shirt']
             assigned += 1
-    print(f'[Livynth] Preview wardrobe: recolored {assigned} torso/arm polygons; no geometry changed')
+        else:
+            face.material_index = indexes['skin']
+            clay_faces += 1
+    if not assigned or not clay_faces:
+        raise RuntimeError('Studio preview material mask has no shirt or visible skin')
+    print(f'[Livynth] Studio diagnostic materials: {clay_faces} clay and '
+          f'{assigned} navy-shirt polygons; no geometry changed')
 
 
 def set_test_pose(meshes, weights):
@@ -223,7 +253,7 @@ def camera_and_lights(scene, meshes, front, preset):
     cam_data.keyframe_insert(data_path='ortho_scale',frame=1)
     cam_data.ortho_scale *= 0.975
     cam_data.keyframe_insert(data_path='ortho_scale',frame=scene.frame_end)
-    strengths = (255,105,190) if preset == 'studio' else (450,230,390)
+    strengths = (370,195,285) if preset == 'studio' else (450,230,390)
     for name, offset, strength, size in [
         ('Key',(-0.8,-1.4,1.4),strengths[0],1.7),
         ('Fill',(0.9,-1.2,0.6),strengths[1],1.9),
@@ -260,7 +290,7 @@ def camera_and_lights(scene, meshes, front, preset):
         emission.inputs['Color'].default_value=(0.045,0.065,0.09,1.0)
         emission.inputs['Strength'].default_value=1.0
         mat.node_tree.links.new(emission.outputs[0],output.inputs['Surface'])
-        scene.view_settings.exposure=-0.4
+        scene.view_settings.exposure=0.05
         if scene.world:
             scene.world.use_nodes=True
             bg=scene.world.node_tree.nodes.get('Background')

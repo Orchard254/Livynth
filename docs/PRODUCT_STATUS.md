@@ -55,6 +55,14 @@ A pre-render blocker was identified: previously a supplied PCM WAV containing co
 
 **Next owner evidence needed:** the **existing** `livynth_smoke.mp4` and `studio_run.json` from that output folder. Do not ask to rerun the completed smoke. If playback is acceptable, use a separate mid-speech/mid-blink diagnostic render before spending hours on a full 1080×1920 sequence.
 
+## Independent owner MP4 review + STUDIO-006 candidate (2026-11-12)
+
+The owner uploaded the actual `livynth_smoke.mp4` and `studio_run.json`. The 56,920-byte MP4 was independently decoded: 30/30 540x960 H.264 frames at 30 fps, 1.000-second video, AAC stereo audio 1.002 seconds, signal RMS -22.69 dBFS, no decoding errors. Mouth movement is visibly present. **First production smoke: technical PASS**. No human-listened transcript/sync acceptance is claimed.
+
+**Visual quality: FAIL.** The face is too small in the portrait and uniformly blue-gray and underlit; no visible hair and no credible wardrobe distinction. Character 001 likeness remains FAIL. See `docs/gate_runs/2026-11-12-studio-smoke/INDEPENDENT_MP4_REVIEW.md`.
+
+**STUDIO-006 corrective action:** reversible diagnostic-only framing, clay face vs navy placeholder shirt, moderately brighter lights. Original GLB geometry and rig remain unchanged. The change requires a new **one-frame Windows portrait preview** for acceptance; do not render a costly full video until appearance is reviewed.
+
 ## Explicit next acceptance gates
 
 1. **Owner Windows integrated smoke**: open the Studio, inspect actual neutral PNG, render a 30-frame MP4 and confirm it visually plays with audible speech; save `studio_run.json` and Blender diagnostics. Fail any stage that is black, visually incorrect, silent, or crashes. Repeat with `--mode demo` before release.
