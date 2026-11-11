@@ -113,9 +113,10 @@ def branches(base: str) -> list[dict]:
             continue
         name, sha, date, subject = (line.split("|", 3) + ["", "", "", ""])[:4]
         ahead = 0
-        if name != "main":
-            count = git("rev-list", "--count", f"{base}..{name}").strip()
-            ahead = int(count) if count.isdigit() else 0
+        # Every branch is counted against the base, including `main`: a moved
+        # `main` is exactly the failure this audit must catch.
+        count = git("rev-list", "--count", f"{base}..{name}").strip()
+        ahead = int(count) if count.isdigit() else 0
         commits = []
         if ahead:
             log = git("log", "--no-merges", "--pretty=format:%H|%s", f"{base}..{name}")
