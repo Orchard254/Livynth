@@ -46,6 +46,8 @@ def _parse_args():
     out = None
     json_out = None
     rig = "default"
+    stage1_template = None
+    stage1_constraints = None
     i = 0
     while i < len(argv):
         if argv[i] == "--out" and i + 1 < len(argv):
@@ -60,8 +62,18 @@ def _parse_args():
             rig = argv[i + 1]
             i += 2
             continue
+        if argv[i] == "--stage1-template" and i + 1 < len(argv):
+            stage1_template = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--stage1-constraints" and i + 1 < len(argv):
+            stage1_constraints = argv[i + 1]
+            i += 2
+            continue
         i += 1
-    return out, json_out, rig
+    if stage1_template and stage1_constraints:
+        raise ValueError("--stage1-template and --stage1-constraints are exclusive")
+    return out, json_out, rig, stage1_template, stage1_constraints
 
 
 def _clear_scene():
@@ -92,7 +104,7 @@ def _stash_armature_modifier(obj):
 
 
 def main() -> int:
-    out_glb, out_json, rig_name = _parse_args()
+    out_glb, out_json, rig_name, stage1_template, stage1_constraints = _parse_args()
 
     import bpy
     from bl_ext.user_default.mpfb.services import (
@@ -257,6 +269,31 @@ def main() -> int:
             new_bm, bake_masks=True, bake_subdiv=True,
             remove_helpers=True, also_proxy=True)
     step("bake_modifiers_remove_helpers", _bake_mods)
+
+    # ---- OPTIONAL Stage-1 geometric fit, BEFORE facial targets ----------
+    # Without these flags the Stage-0 baseline execution path is unchanged.
+    # A failed fit must NEVER produce a GLB named as a fitted candidate.
+    if stage1_template or stage1_constraints:
+        import stage1_blender_bridge
+        if stage1_template:
+            def _template():
+                report["stage1"] = stage1_blender_bridge.write_template(
+                    new_bm, stage1_template)
+            step("stage1_template", _template)
+        if stage1_constraints:
+            def _stage1():
+                report["stage1"] = stage1_blender_bridge.apply_constraints(
+                    new_bm, stage1_constraints)
+            step("stage1_fit", _stage1)
+        if report["errors"]:
+            report["fatal"] = "Stage-1 request rejected; no GLB exported"
+            text = json.dumps(report, indent=2)
+            print(text)
+            if out_json:
+                os.makedirs(os.path.dirname(os.path.abspath(out_json)), exist_ok=True)
+                with open(out_json, "w", encoding="utf-8") as fh:
+                    fh.write(text)
+            return 2
 
     def _restore():
         if export_arm is not None:
