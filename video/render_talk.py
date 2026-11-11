@@ -89,7 +89,7 @@ def shirt_cutoff(x, z, horizontal_center, crown, height):
     if height <= 0:
         raise ValueError('Height must be positive')
     shoulder = min(1.0, abs(x-horizontal_center)/(0.22*height))
-    neckline = crown - height*(0.335 - 0.10*shoulder)
+    neckline = crown - height*(0.22 - 0.055*shoulder)
     return z < neckline
 
 
