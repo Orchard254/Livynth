@@ -16,6 +16,11 @@ def main():
     p.add_argument('--blender',default='blender',help='blender or absolute blender.exe path')
     p.add_argument('--out',type=Path,default=Path('output/livynth_m001.mp4'))
     p.add_argument('--preview',action='store_true')
+    p.add_argument('--preview-set',action='store_true',help='Render four diagnostic portrait poses')
+    p.add_argument('--preset',choices=('studio','legacy'),default='studio')
+    p.add_argument('--preview-scale',type=int,default=50)
+    p.add_argument('--preview-samples',type=int,default=16)
+    p.add_argument('--max-frames',type=int,default=0,help='Fast MP4 smoke: e.g. 30 = one second at 30fps')
     p.add_argument('--front',choices=('negative-y','positive-y'),default='negative-y')
     args=p.parse_args()
     if not shutil.which(args.blender) and not Path(args.blender).is_file():
@@ -34,9 +39,14 @@ def main():
     subprocess.run(command,check=True)
     command=[args.blender,'-b','--python',str(scripts/'render_talk.py'),'--',
              '--glb',str(args.glb),'--timeline',str(timeline),
-             '--audio',str(args.audio),'--out',str(output),'--front',args.front]
+             '--audio',str(args.audio),'--out',str(output),'--front',args.front,
+             '--preset',args.preset,'--preview-scale',str(args.preview_scale),
+             '--preview-samples',str(args.preview_samples),
+             '--max-frames',str(args.max_frames)]
     if args.preview:
         command.append('--preview')
+    if args.preview_set:
+        command.append('--preview-set')
     print('Executing:', ' '.join(command),flush=True)
     subprocess.run(command,check=True)
 
