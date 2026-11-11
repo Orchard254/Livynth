@@ -16,6 +16,12 @@ The existing `video/build_video.py` and `video/render_talk.py` remain the produc
 
 A production run writes `studio_run.json` that says `PASS_ARTIFACTS_NOT_IDENTITY` only if expected artifacts pass basic format/structural checks. The report marks `identity_likeness` as **UNVERIFIED** and `video_audio_stream` as **TRACKS_PRESENT_UNVERIFIED_PLAYBACK** only after structural audio and video track checks pass. Actual speech audibility and lip-sync remain manual/product QA gates.
 
+## STUDIO-005 — narration signal preflight
+
+Before Blender starts a render, Studio now streams the WAV in 50-ms blocks and rejects truncated/unsupported PCM, audio shorter than 0.25s or longer than 120s, effectively silent waveforms, constant DC signals, near-silent audio and isolated clicks. It checks both generated Windows TTS and user-supplied WAVs, with a second check before the first render to catch a replaced file. Supported uncompressed WAV sample widths: 8/16/24/32 bit, 1–8 channels, 8–192 kHz. The default activity gate requires 0.12s above −55 dBFS; it uses per-channel DC-removed RMS and reads the file without changing it.
+
+The `studio_run.json` report records `narration_signal` and, when Studio generated the WAV, a per-step `audio_signal_audit`. **Passing means measurable signal, NOT audible understandable speech, transcription match, phoneme alignment or the presence of audio in a successfully decoded MP4.** Playback review remains mandatory. Very quiet legitimate files may require normalizing the recorded WAV before import.
+
 ## Testing and acceptance
 
 - `python -m unittest tests.test_studio -v` — pure Python orchestration negative/control tests (headless, no Blender necessary).
