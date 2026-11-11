@@ -9,3 +9,5 @@ assets/*.glb
 assets/*.wav
 assets/*.mp3
 assets/*.png
+# Keep generated reference photos and character assets out of Git history
+assets/characters/**
