@@ -41,6 +41,20 @@ Found a Blender 4.5 Python API hazard in `video/render_talk.py`: the first `Scen
 
 A pre-render blocker was identified: previously a supplied PCM WAV containing complete silence was accepted merely because it existed, and a generated WAV was checked only for its frame count. The new `video/wav_qa.py` refuses effectively silent or malformed files before any Blender rendering starts; generated WAV checks and previously supplied WAV checks share the same implementation. The studio run manifest records measurable audio signal QA. The equivalent local standard-library Studio/MP4/WAV test harness passes **38/38** synthetic tests, including failure injection that proves no render subprocess starts for silence. The **real owner Windows Blender MP4 and audible speech gate remain UNVERIFIED**. Audio activity does not prove phoneme correctness or playback.
 
+## STUDIO-005 owner Windows MP4 smoke result (2026-11-12)
+
+**First real integrated smoke render: PASS_ARTIFACTS_NOT_IDENTITY.** Owner supplied Windows PowerShell/Blender 4.5.10 log for `python livynth_studio.py --cli --mode smoke` on development commit `35da149` (2026-11-12 about 02:29 Africa/Nairobi).
+
+- Output folder: `output/studio/20261112_022923_287399/`.
+- Neutral MPFB rigged character built/exported: 13,380 baked vertices, 13,378 native quad faces, 163 joints and 67 exported face targets; 13/13 export assertions PASS. 5,765,824-byte GLB created; glTF exporter warns that vertices with more than four influences are reduced to top four.
+- Windows speech generated and Studio WAV-signal preflight accepted; `timeline.json` contains 323 frames using the approximate spelling-and-energy method (not phoneme alignment).
+- Blender imported the GLB, animated one facial shape-key group (17 named shapes across timeline), selected `Human_export_copy` for temporary dark-shirt material, and rendered **all 30/30 smoke frames** without a crash. Rendered file: `livynth_smoke.mp4`.
+- Studio's checks returned `PASS_ARTIFACTS_NOT_IDENTITY`, which implies the MP4 structure and required track presence/dimensions were accepted by current CLI checks. **Neither the MP4 bytes nor `studio_run.json` were uploaded in this evidence batch**, so independent visual/audio playback review remains **PENDING**.
+- The 30-frame smoke video is only one second at 30 fps; existing fixed blinks begin at t=2.15 s, so a missing blink in this one-second video would be expected rather than a regression.
+- Production-grade hair, eyes, skin, real wardrobe, accurate Character 001 likeness, phoneme alignment and full video acceptance remain unmet.
+
+**Next owner evidence needed:** the **existing** `livynth_smoke.mp4` and `studio_run.json` from that output folder. Do not ask to rerun the completed smoke. If playback is acceptable, use a separate mid-speech/mid-blink diagnostic render before spending hours on a full 1080×1920 sequence.
+
 ## Explicit next acceptance gates
 
 1. **Owner Windows integrated smoke**: open the Studio, inspect actual neutral PNG, render a 30-frame MP4 and confirm it visually plays with audible speech; save `studio_run.json` and Blender diagnostics. Fail any stage that is black, visually incorrect, silent, or crashes. Repeat with `--mode demo` before release.
