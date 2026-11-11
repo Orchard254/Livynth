@@ -79,3 +79,14 @@ See [M001 milestone details](docs/M001.md).
 ## Development principles
 
 Build end-to-end capabilities before feature sprawl. Keep assets and provenance records. Separate facial geometry, animation, speech and rendering. Do not claim photoreal or synchronized final output until inspected.
+
+## C001 — Character 001 geometry track
+
+The accepted Character 001 photography pack is being used as an **identity reference**. C001-GEO-01 created a diagnostic silhouette shell (not an animatable face); C001-GEO-02 implements a **conservative morph-safe fitting candidate** from the previously supplied V32 skinned GLB.
+
+- [C001-GEO-01 image/geometry diagnosis](docs/characters/C001-GEO-01.md)
+- [C001-GEO-02 verified fitting candidate and commands](docs/characters/C001-GEO-02.md)
+- `geo/morph_fit.py` preserves scene geometry topology, animation and skin definitions while transporting morph positions and normals through a smooth deformation.
+- `geo/audit_morph_fit.py` checks morph, skin, UV and animation invariants, with a separate test suite under `geo/tests`.
+
+**Current quality gate:** the experimental GLB retains its original ponytail and identity; **it has not passed Character 001 likeness or Blender-render acceptance**. The GLB itself is an output artifact and is intentionally not stored in Git.
