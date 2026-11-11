@@ -60,6 +60,11 @@ escalation.** Case (c) is rejected — see §6.
 ## 1. Target pipeline (end to end)
 
 ```
+   ┌───────────────────────────────────────────────────────────────────┐
+   │ STAGE 0  CC0 quad basemesh -> rigged, morph-enabled character GLB │
+   │          (already EXECUTED and measured -- see §2)                │
+   └─────────────────────────────────┬─────────────────────────────────┘
+                                     │
                     Character 001 references (15 PNG, approved views)
                                      │
                      MediaPipe landmarks (8 views detected, calibrated=false)
@@ -117,19 +122,27 @@ $w = 'C:\Users\orcha\.local\share\opencode\worktree\3e7201\livynth-c001-geo04-to
 ```
 
 **Measured result** (`tools/mpfb_headless_probe.py`, all steps `ok`, `errors: []`;
-37.52 s wall clock on the first run, 20.3 s on a warm re-run)
+~20–40 s wall clock; exit code 0)
 
 ```
-create_human                  = ok     -> 19158 verts / 18486 polys / 100.00 % quads
+create_human                    = ok     -> 19158 verts / 18486 polys / 100.00 % quads
                                             uv ["UVMap"] / 152 vertex groups
                                             shape keys [Basis, $md-$ca-$ma-$yn,
                                             $md-universal-$ma-$yn-$av$mu-$av$wg]
-create_character_copy         = ok
-bake_targets                  = ok     -> bakes the macro modelling shape keys
-bake_modifiers_remove_helpers = ok     -> 13380 verts / 13378 polys / 100.00 % quads
-load_face_targets             = ok     -> 52 ARKit face units + 15 Meta visemes
-interpolate_targets           = ok
-export_glb                    = ok     -> 15090388 bytes
+add_builtin_rig                = ok     -> armature "Human.rig", 163 bones
+                                            basemesh parented to the armature
+                                            291 weighted vertex groups
+create_character_copy           = ok     -> "Human.rig_export_copy" (ARMATURE)
+                                            + "Human_export_copy" (MESH)
+stash_armature_modifier        = ok     -> Armature modifier removed before baking
+bake_targets                    = ok     -> bakes the macro modelling shape keys
+bake_modifiers_remove_helpers   = ok     -> 13380 verts / 13378 polys / 100.00 % quads
+restore_armature_modifier       = ok     -> Armature modifier re-pointed at the copy
+load_face_targets               = ok     -> 52 ARKit face units + 15 Meta visemes
+interpolate_targets             = ok     -> 67 shape keys
+delete_non_export_objects       = ok     -> deleted [Camera, Cube, Human, Human.rig, Light]
+export_glb                      = ok     -> 5765824 bytes
+audit_exported_glb              = ok     -> 13 assertions, all true
 ```
 
 **Stage 0 exit criteria — all met**
@@ -141,14 +154,22 @@ export_glb                    = ok     -> 15090388 bytes
 | Non-manifold edges | 0 | PASS |
 | Loose vertices | 0 | PASS |
 | UV layer present | `UVMap`, non-overlapping (0 overlapping cells @512²) | PASS |
-| Vertex groups | 152 | PASS |
+| Vertex groups | 152 (291 after rigging, incl. weights) | PASS |
 | ARKit morph targets load | 67 shape keys | PASS |
 | ADR-required ARKit names present | 10/10 `true` | PASS |
 | Targets actually displace geometry | yes — e.g. `jawOpen` 2 249 verts / 3.87 mm, `eyeBlinkLeft` 718 verts / 1.26 mm | PASS |
+| **Facial rig present in the exported file** | `armature_present: true`, `skin_present: true`, **163 joints** incl. `jaw`, `head`, `neck01/02/03`, `eye.L/R`, `orbicularis03/04.L/R` | PASS |
+| **Rig is bound and functional** | skin weight coverage 14 517/14 517 = **100 %**; posing `jaw` 20° moves **884** verts (max 3.58 mm); `eyeBlinkLeft` = 1.0 moves **747** verts (max 1.26 mm) | PASS |
+| **Exactly one character in the file** | `exported_mesh_count: 1` (`base.001`), `scene_roots: ["Human.rig_export_copy"]`, `non_character_meshes: []`, `default_cube_present: false` | PASS |
 
-**This is the acceptance gate for my own task**: quad topology inspection ✅
-and a working neutral/blink/jaw morph rig ✅. What is *not* yet proven is that
-the rig still works **after** the identity fit — that is Stage 2.
+The last three rows are the C001-GEO-04 export-defect fixes (D1/D2/D3); see
+`docs/C001_GEO04_BASEMESH_PROVENANCE.md` §5 for the root causes and the
+before/after numbers.
+
+**This is the acceptance gate for my own task**: quad topology inspection ✅,
+a working neutral/blink/jaw morph rig ✅, and a working facial skin ✅. What
+is *not* yet proven is that the rig still works **after** the identity fit —
+that is Stage 2.
 
 ---
 
@@ -304,10 +325,34 @@ After Stage 2, re-run the same measurement as Stage 0 and require:
 | Neutral shell count | 1 body shell | 1 body shell |
 | Non-manifold edges | 0 | 0 |
 | Self-intersection after fit | n/a | 0 |
+| **Skin still bound** | 14 517/14 517 (100 %) | **100 %** — the fit must not orphan vertices |
+| **Skin joint count** | 163 | 163, unchanged |
+| **Rig still functional** | `jaw` 20° → 884 verts / 3.58 mm | **≥ 700 verts moved**, max displacement ≥ 0.02 |
+| **Morph still functional in the exported file** | `eyeBlinkLeft` = 1.0 → 747 verts / 1.26 mm | **≥ 600 verts moved** |
+| **Export hygiene** | 1 mesh, 1 scene root, no cube | unchanged |
 
 The two "region only" checks are new and matter: a target that moves the
 *wrong* vertices is the classic silent failure of a transferred blendshape rig,
-and it is invisible in a thumbnail.
+and it is invisible in a thumbnail. The last four rows are checked by
+`tools/verify_glb_rig.py` (re-imports the exported GLB and *measures* the
+rig and the morph target) and by the probe's own export assertions.
+
+**Implementation note (important).** The Stage-1 fit must be applied to the
+**Blender-side basemesh**, and the rig must be added to the **full 19 158-vertex
+basemesh before the helper geometry is removed** — MPFB's
+`weights.default.json` is keyed by *basemesh vertex index*, so rigging the
+reduced 13 380-vertex mesh would bind the weights to the wrong vertices.
+The order that works (and is what `tools/mpfb_headless_probe.py` now does):
+
+```
+create_human  ->  add_builtin_rig  ->  create_character_copy
+               ->  stash Armature modifier
+               ->  bake_targets / bake_modifiers_remove_helpers
+               ->  restore Armature modifier (re-pointed at the copy)
+               ->  load_face_targets / interpolate_targets
+               ->  delete everything except the export copy
+               ->  export GLB (+ export_skins=True, export_apply=False)
+```
 
 ### 4.4 Stage 2 failure modes
 
@@ -332,7 +377,7 @@ and it is invisible in a thumbnail.
 | **4. Texture bake** | Bake base colour / normal / roughness / AO at **2048×2048** (ADR decision 6). Source: the 15 approved PNGs, projected **only as a colour source** — the geometry must already pass the gate first. | local PNGs | **Colour bleeding from a photo projection** (the exact ADR failure mode); projection must be photo-independent for the geometry gate | none, but **no upload to any external service** |
 | **5. Hair** | CC0 MakeHuman hair (`short01`/`short02`/`bob01`/`long01` — all CC0 per the upstream asset page) + auburn albedo tint. Hair *cards* for the silhouette. | CC0 | Card silhouettes read as cut-out from 90°; card orientation must be verified in the R90 view | none |
 | **6. Eyeballs / eyelids** | Eyeball as a separate mesh (CC0 `high-poly` eyes), own UV for sclera + iris; eyelids driven by `eyeBlinkLeft/Right`; iris colour = hazel/amber per the reference | CC0 | Iris parallax mismatch; eyelid clipping at full blink; **eyelid geometry must be verified at 0.0, 0.5 and 1.0** | none |
-| **7. Export + gate** | Export GLB with `export_morph=True`, ARKit names, rig + weights. Then run the ADR's geometry-first acceptance protocol. | — | See §8 | **the blind review itself needs the ADR's protocol**; the reviewer must be independent and sealed |
+| **7. Export + gate** | Export GLB with `export_morph=True`, ARKit names, **and the skin** (`export_skins=True`, `export_apply=False` so the Armature modifier stays live). The file must contain exactly **one** character mesh, **one** scene root (the armature), and **no** default cube / source-mesh duplicate — all asserted by `tools/mpfb_headless_probe.py`. Then run the ADR's geometry-first acceptance protocol. | — | See §8 | **the blind review itself needs the ADR's protocol**; the reviewer must be independent and sealed |
 
 ### 5.1 The ADR's 6 morph targets — name mapping
 
@@ -398,6 +443,17 @@ The path is **not** done when a GLB exists. It is done when:
    topology class (expect 100 % quads pre-export / triangulated post-export),
    face-normal consistency, camera scale assumptions, and a **working** rig +
    blendshape inventory.
+   Concretely, the exported GLB must satisfy — and these are now **machine
+   asserted** by `tools/mpfb_headless_probe.py` and measured by
+   `tools/verify_glb_rig.py`:
+   * exactly one character mesh, one scene root, no default cube, no
+     duplicate of the source mesh;
+   * `skin_present` with 163 joints including `jaw`, `head`, `eye.L/R`;
+   * skin weight coverage 100 % of vertices;
+   * posing `jaw` moves ≥ 700 vertices;
+   * driving `eyeBlinkLeft` to 1.0 moves ≥ 600 vertices;
+   * 67 morph targets with `extras.targetNames` present and all 10
+     ADR-required ARKit names among them.
 3. **The wrong-identity canary (1.18× face width) is REJECTED** by the gate.
    If it is accepted, the result is `gate_valid: false` — **BLOCKED**, not
    passed. (This is the exact control that the Phase-3 2D metrics failed.)
@@ -430,7 +486,7 @@ The path is **not** done when a GLB exists. It is done when:
 
 | Stage | Status |
 |---|---|
-| STAGE 0 — CC0 basemesh → rigged, morph-enabled GLB | **EXECUTED, MEASURED, PASS** (§2; re-run confirmed reproducible) |
+| STAGE 0 — CC0 basemesh → **rigged**, morph-enabled GLB | **EXECUTED, MEASURED, PASS** (§2; re-run confirmed reproducible, incl. the facial skin) |
 | STAGE 1 — identity fit | **SPECIFIED, NOT EXECUTED** |
 | STAGE 2 — re-bake morph rig onto the fitted neutral | **SPECIFIED, NOT EXECUTED** |
 | STAGE 3 — UV | **SPECIFIED, NOT EXECUTED** |
@@ -459,6 +515,8 @@ carry Character 001's identity while keeping a working ARKit morph rig?*
   * `01_subject_front.png` → `sha256 9d84f485883ce613d12d02d9f8f85e338ebe950d7248d522bf3117901eaed2dd`
     (as recorded in the C001-GEO-03 `front.json` landmark provenance)
 * **Artifact paths:** `output/c001_geo04/{probe.json, probe.glb,
-  probe_glb_topology.json, base_obj_topology.json, base_obj_blender_audit.json}`
-  — **all git-ignored; no binaries committed**
+  probe_glb_topology.json, probe_rig_verification.json, base_obj_topology.json,
+  base_obj_blender_audit.json}` — **all git-ignored; no binaries committed**
 * **Known failure modes:** see §3.3, §4.4, §9
+* **C001-GEO-04 export-defect fixes (D1/D2/D3):** see
+  `docs/C001_GEO04_BASEMESH_PROVENANCE.md` §5

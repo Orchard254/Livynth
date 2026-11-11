@@ -27,7 +27,7 @@ filename, a blog post, a third-party README, or a previous agent's report.
 | Is it quad-dominant? | **Yes — 100.00 % quads** (18 486 / 18 486 faces), 0 tris, 0 ngons |
 | Is it usable for face-region deformation? | **Yes** — measured 100 % quads in brow / eye-socket / nose / lips / jaw / neck regions; 97.61 % of body vertices have regular quad valence 4 |
 | Does it have UVs usable for baking? | **Yes** — one full `[0,1]²`-spanning, **non-overlapping** UV layout (0 overlapping cells of 83 621 at 512²) |
-| Is it rigged? | It is a raw sculpt base, but MPFB ships **152 vertex groups**, a 67-joint rig definition (incl. `Jaw`, `Head`, `Neck`, `Left/RightEye`, `Left/RightOrbicularisTop/Bottom`), and per-target rig weights |
+| Is it rigged? | **Yes — and the rig is in the exported file.** MPFB's standard rig is added explicitly (`add_builtin_rig`): **163 joints** in the exported skin, including `jaw`, `head`, `neck01/02/03`, `eye.L/R`, `orbicularis03/04.L/R`. Measured working: posing `jaw` 20° moves 884 vertices (max 3.58 mm); `eyeBlinkLeft` = 1.0 moves 747 vertices (max 1.26 mm); skin weight coverage 14 517/14 517 = 100 %. |
 | Does it carry the required morph targets? | **Yes** — 52 ARKit face units + 15 Meta visemes are installed on this machine and were **successfully loaded and measured** in a headless run (§4) |
 | Is Blender's bundled `rig_human` present? | **No** — it does not exist in this Blender build (§1.3) |
 | Anything that blocked the whole option? | **No.** Nothing needs to be downloaded, registered for, purchased, or approved before work can start |
@@ -159,6 +159,22 @@ CC0 and is recorded for completeness.
 `https://github.com/makehumancommunity/mpfb2/blob/master/LICENSE.ASSETS.md` is the
 verbatim **Creative Commons CC0 1.0 Universal** legal code (Waiver +
 Public License Fallback + Limitations and Disclaimers).
+
+> **⚠ There is NO `LICENSE.md` (nor `LICENSE.ASSETS.md`, nor `COPYING`) file
+> inside the installed extension directory.**
+> Verified by exhaustive search of the installed tree:
+> `Get-ChildItem <mpfb> -Recurse -File -Include '*LICENSE*','*COPYING*','*README*'`
+> returns **only** `data/expressions/README.md`, `data/targets/_images/README.md`
+> and three `ui/create_assets/*/objectproperties/license.json` files (those are
+> per-created-asset licence fields for assets the *user* creates, not the
+> licence of the bundled assets).
+> The upstream licence text therefore lives **only** in the upstream repository
+> (`mpfb2/LICENSE.md`, `mpfb2/LICENSE.ASSETS.md`) and on the upstream website.
+> Do not go looking for a local licence file — it is not there. What *is* there,
+> and is independent evidence, is the **CC0 header inside each asset file**
+> (`base.obj` lines 1–16, every `*.proxy` file lines 1–14), the per-asset
+> `"license": "CC0"` fields in the pack metadata JSONs, and the `"license":
+> "CC0"` field inside `data/rigs/standard/weights.default.json`.
 
 **Primary source D — the file is the upstream file.** The upstream raw file
 `https://raw.githubusercontent.com/makehumancommunity/mpfb2/master/src/mpfb/data/3dobjs/base.obj`
@@ -320,7 +336,7 @@ not used here.
 ## 3. Topology suitability — measured, not asserted
 
 All numbers below come from the tools in this branch, run against the actual
-file. Commands are reproducible (§5).
+file. Commands are reproducible (§6).
 
 ### 3.1 Headline topology of the recommended basemesh (`base.obj`)
 
@@ -541,7 +557,180 @@ deformed neutral. See `docs/C001_GEO04_RETOPOLOGY_PATH.md` §3.
 
 ---
 
-## 5. Reproducing every number in this document
+## 5. Export defects found by the coordinator, and their fixes
+
+The coordinator independently re-verified the provenance and topology claims
+above (all confirmed) and found **three defects in the exported GLB**. All
+three were reproduced locally, root-caused, fixed, and are now covered by
+machine-checkable assertions.
+
+### 5.0 Before / after at a glance
+
+| | before (commit `65f4a2e`) | after |
+|---|---|---|
+| GLB size | 15 090 388 B | **5 765 824 B** |
+| scene roots | `Cube`, `Human`, `Human_export_copy` | **`Human.rig_export_copy`** (1) |
+| meshes in file | `Cube`, `base`, `base.001` | **`base.001`** (1) |
+| `skins` | `null` | **1 skin, 163 joints** |
+| `animations` | `null` | `[]` (unchanged; see the D1 note below) |
+| morph targets | 67 on `base.001` | 67 on `base.001` |
+| probe assertions | none | **13, all passing** |
+
+### 5.1 D1 — no armature / no skin
+
+**Root cause (measured, not guessed).** `HumanService.create_human()` returns a
+**bare, unrigged** mesh: no parent, no armature object, no Armature modifier.
+The probe never called `HumanService.add_builtin_rig(...)`, so
+`ExportService.create_character_copy()` had no rig to copy — MPFB's export
+service only copies a rig that already exists. The "67-joint rig" in my
+earlier report existed as MPFB *asset files on disk*
+(`data/rigs/standard/rig.default.json`, `weights.default.json`) and as the rig
+on the pre-existing `mpfb.glb` in `%TEMP%`, but it **never reached the file my
+probe produced**. That was a real defect in my report, and the coordinator was
+right to reject it.
+
+**Fix.** The probe now rigs explicitly:
+
+```python
+armature = HumanService.add_builtin_rig(basemesh, "default", import_weights=True)
+```
+
+`add_builtin_rig` loads `rigs/standard/rig.default.json`, creates the armature,
+parents the basemesh to it, and loads `rigs/standard/weights.default.json`
+(per-vertex-index weights; that file itself carries `"license": "CC0"`,
+`"name": "MakeHuman weights"`, `"version": 110`). Because the weights are keyed
+by **basemesh vertex index**, the rig must be applied to the **full 19 158-vertex
+basemesh**, *before* the helper geometry is removed — rigging the reduced
+13 380-vertex mesh would put the weights on the wrong vertices. The export copy
+is therefore made *after* rigging, so it inherits the armature and the vertex
+groups.
+
+**Measured result in the exported file**
+
+```
+armature_present : True
+skin_present     : True
+joint_count      : 163
+facial joints    : jaw, head, neck01, neck02, neck03, eye.L, eye.R,
+                   orbicularis03.L, orbicularis04.L, orbicularis03.R, orbicularis04.R
+scene_roots      : ['Human.rig_export_copy']
+node 163         : {'mesh': 0, 'name': 'Human_export_copy', 'skin': 0}
+node 164         : {'children': [163, 162], 'name': 'Human.rig_export_copy'}
+```
+
+**The rig is not merely present — it works.** `tools/verify_glb_rig.py`
+re-imports the exported GLB into a fresh Blender scene and *measures* it:
+
+```
+SKIN WEIGHT COVERAGE: {"vertices_total": 14517, "vertices_bound": 14517, "bound_pct": 100.0}
+BONE TEST : jaw rotated 20 deg -> 884 vertices moved, max displacement 0.035792 BU (3.58 mm)
+MORPH TEST: eyeBlinkLeft = 1.0  -> 747 vertices moved, max displacement 0.012614 BU (1.26 mm)
+checks_passed: true
+```
+
+**Baking-order hazard found and handled.** `bake_modifiers_remove_helpers()`
+applies the `MASK`/`SUBSURF` modifiers; with an `ARMATURE` modifier present in
+the stack, Blender would evaluate the mask in deformed space. The probe now
+**stashes** the Armature modifier before baking and **restores** it afterwards
+via `RigService.ensure_armature_modifier(export_mesh, export_armature)`
+(verified in the JSON: `basemesh_baked.modifiers = [["Armature","ARMATURE"]]`,
+`armature_modifier_target = "Human.rig_export_copy"`).
+
+**Animation clips: measured, and explicitly a non-defect.** `animations: []`.
+The MPFB pipeline authors no animation clips — and neither does the retired V32
+`ours-photoreal.glb` (measured: `animations=[]`, `skin_present=False`,
+`armature_present=False` — i.e. the *old* avatar had no rig in its file either).
+So a missing animation clip is **not a regression**; facial motion is driven at
+runtime by the 67 morph targets and by poses on the 163-joint rig, both of
+which are present and now measured to work.
+
+### 5.2 D2 — Blender's default Cube was in the export
+
+**Root cause.** The probe never cleared the scene, and Blender's startup file
+contains a default `Cube` (plus `Camera` and `Light`). The glTF exporter with
+`use_selection=False` exports the whole scene.
+
+**Fix — two independent guards.**
+
+1. `clear_scene` at the very start of the probe (measured: `Camera`, `Cube`,
+   `Human`, `Human.rig`, `Light` all removed).
+2. A `delete_non_export_objects` pass immediately before the export that removes
+   every object not in the export-copy collection (measured:
+   `deleted_before_export = ["Camera","Cube","Human","Human.rig","Light"]`;
+   `objects_in_scene_before_export = [("Human.rig_export_copy",ARMATURE),
+   ("Human_export_copy",MESH)]`).
+
+**Measured result:** `exported_mesh_count = 1`, `default_cube_present = false`,
+`unexpected_objects = []`.
+
+### 5.3 D3 — the un-baked source mesh was also exported
+
+**Root cause.** `create_character_copy()` *duplicates* the character; the
+original source mesh (`Human`, 19 158 v / 18 486 f, 2 morph targets) stayed in
+the scene alongside the export copy (`Human_export_copy`, 14 517 v, 67 morph
+targets) and was exported too.
+
+**Fix.** The `delete_non_export_objects` pass above removes the source mesh and
+its armature, keeping only the export copy and its duplicated armature.
+
+**Measured result:** `exported_mesh_count = 1`, `mesh_names = ["base.001"]`,
+`non_character_meshes = []`, `character_mesh_name = "base.001"`,
+`scene_roots = ["Human.rig_export_copy"]`.
+
+### 5.4 The measurement tool's own bug (the coordinator's false reading)
+
+The coordinator's first pass read only `meshes[0]` and got a false
+"0 morph targets" reading **because `meshes[0]` was the default cube**.
+`tools/measure_glb_topology.py` has been rewritten to be multi-mesh aware:
+
+* reports **every** mesh, with its node names, vertex/triangle counts and
+  morph-target counts;
+* **locates the character mesh explicitly** — `--mesh NAME` override, else the
+  mesh with the most morph targets (tie-break: most triangles), and a default
+  cube is *never* selected as the character;
+* reports `scene_roots`, `exported_object_names`, `skin_present`,
+  `armature_present`, `joint_count`, `animations`;
+* flags `default_cube_present` and lists `non_character_meshes`.
+
+Regression-tested in `tests/test_basemesh_tools.py`
+(`test_multi_mesh_glb_does_not_read_only_meshes_zero`,
+`test_default_cube_is_never_chosen_as_the_character`,
+`test_scene_roots_and_skin_are_reported`).
+
+Demonstration on the retired V32 GLB (7 meshes — the exact class of file that
+caused the false reading):
+
+```
+meshes (7): eyebrow005.001 morphs=21 | eyelashes01.001 0 | high-poly.001 0 |
+            short01.001 39 | teeth_base.001 0 | tongue01.001 0 | base.001 67
+character mesh : base.001      <- correct; meshes[0] would have been eyebrow005.001
+skin_present=False  armature_present=False  joint_count=0
+```
+
+The last line is a **new finding**: the retired V32 avatar has **no skin and no
+armature in the file either**. The rig gap was therefore never specific to my
+probe — it was a gap in the whole `our_avatar` pipeline, and the current probe
+is the first artifact in this project that actually ships a working skin.
+
+### 5.5 The probe now asserts, and fails loudly
+
+`tools/mpfb_headless_probe.py` audits the **written file** (not the Blender
+scene) and raises `AssertionError` — non-zero exit — if any of these is false:
+
+```
+exactly_one_character_mesh   no_default_cube            no_unexpected_objects
+no_missing_expected_objects  character_node_exported    armature_present
+skin_present                 joint_count_positive       facial_joints_present
+morph_targets_present        target_names_present       required_arkit_all_present
+no_step_errors
+```
+
+Measured on the current run: `assertions_passed: true`,
+`assertions_failed: []`, `errors: []`, exit code **0**.
+
+---
+
+## 6. Reproducing every number in this document
 
 From the worktree root:
 
@@ -557,14 +746,18 @@ python tools\measure_basemesh.py "$mpfb\data\3dobjs\base.obj" --json output\c001
 & $blender --background --factory-startup --python tools\blender_audit_basemesh.py -- `
     "$mpfb\data\3dobjs\base.obj" --json output\c001_geo04\base_obj_blender_audit.json
 
-# (A3) headless MPFB character build + ARKit morph rig  (the sparse proof)
+# (A3) headless MPFB character build + ARKit morph rig + facial skin  (the sparse proof)
 & $blender --background --python tools\mpfb_headless_probe.py -- `
     --out output\c001_geo04\probe.glb --json output\c001_geo04\probe.json
 
-# (A4) measure the exported GLB
+# (A4) measure the exported GLB (multi-mesh aware)
 python tools\measure_glb_topology.py output\c001_geo04\probe.glb --json output\c001_geo04\probe_glb_topology.json
 
-# (A5) machine-wide inventory
+# (A5) functionally verify the rig and the morph targets in the exported file
+& $blender --background --python tools\verify_glb_rig.py -- `
+    output\c001_geo04\probe.glb --json output\c001_geo04\probe_rig_verification.json
+
+# (A6) machine-wide inventory
 cmd /c "dir C:\*.obj /s /b 2>nul"
 cmd /c "dir C:\*.glb /s /b 2>nul"
 cmd /c "dir C:\*.blend /s /b 2>nul"
@@ -575,7 +768,7 @@ Everything under `output/` is git-ignored; **no binary is committed.**
 
 ---
 
-## 6. Recommendation
+## 7. Recommendation
 
 **RECOMMEND: `base.obj` — the MakeHuman `hm08` basemesh bundled with the
 installed MPFB 2.0.18 extension.**
@@ -625,7 +818,7 @@ which this plan never does: all fitting happens locally in Blender.
 
 ---
 
-## 7. What could NOT be verified, and why
+## 8. What could NOT be verified, and why
 
 | Item | Status | Reason |
 |---|---|---|
@@ -634,11 +827,14 @@ which this plan never does: all fitting happens locally in Blender.
 | `C:\PROJECT\Livynth-artifacts\*.glb` (other agents' candidates) | **OUT OF SCOPE / UNVERIFIED** | Produced by other specialists under other briefs; not used by this plan and not licence-audited here. |
 | The **exact skin/hair texture licences** embedded in `ours-photoreal.glb` | **PARTIAL** | Its skin is the CC0 MakeHuman system skin `young_caucasian_female`; its hair texture is a locally tinted copy of the CC0 `short01` diffuse (tinting is a derived work of a CC0 asset). The asset-level chain is CC0, but the file is retired from the C001 path regardless, so this was not pursued further. |
 | Blender "Essentials" human base mesh licence | **NOT APPLICABLE** | Not present on this machine, so no such asset is used. (Had it been present, the correct action would have been to read *its* shipped LICENSE file, not to rely on recollection.) |
+| A **local** `LICENSE.md` for the installed MPFB extension | **DOES NOT EXIST** | Verified by exhaustive search of the installed tree — the upstream licence text lives only in the upstream repo (`mpfb2/LICENSE.md`, `LICENSE.ASSETS.md`) and on the upstream website. See the warning box in §2.1. The CC0 evidence that *is* local is the per-asset file headers and the pack metadata `license` fields. |
+| **Animation clips** in the exported GLB | **NONE — MEASURED, AND NOT A DEFECT** | `animations: []`. The MPFB pipeline authors no clips, and the retired V32 `ours-photoreal.glb` also has `animations=[]`. Motion is driven at runtime by the 67 morph targets and by poses on the 163-joint rig, both measured to move the mesh. |
+| Whether the **facial rig survives a Stage-1 identity fit** | **NOT YET EXECUTED** | Stage 1 (the identity fit) is specified but not run — see `docs/C001_GEO04_RETOPOLOGY_PATH.md` §4. The rig is verified to work on the *unfitted* neutral; verifying it after the fit is the Stage-2 acceptance criterion. |
 | FLAME / FLAME 2023 Open | **NOT TOUCHED** | Explicitly out of scope for this agent; owned by another specialist. Not downloaded, not imported, not evaluated. |
 
 ---
 
-## 8. Provenance block
+## 9. Provenance block
 
 * **Source commit (branch base):** `b0235c1` — *docs(c001): record phase-3 FAIL, seven owner decisions and geometry-first repair gate*
 * **Branch:** `experiment/c001-geo04-topology`
@@ -649,5 +845,5 @@ which this plan never does: all fitting happens locally in Blender.
   * `base.obj` → `sha256 8e761e6624b8f54536409135d1636da63b32486a90d4897f84e121d144f6fb4c` (1 749 303 B)
   * `makehuman_system_assets.json` → 94/94 entries `license: CC0`
   * `faceunits01.json` → 52/52 entries `license: CC0`
-* **Artifacts produced:** `output/c001_geo04/{base_obj_topology.json, base_obj_blender_audit.json, probe.json, probe.glb, probe_glb_topology.json}` — **all git-ignored, no binaries committed**
+* **Artifacts produced:** `output/c001_geo04/{base_obj_topology.json, base_obj_blender_audit.json, probe.json, probe.glb, probe_glb_topology.json, probe_rig_verification.json}` — **all git-ignored, no binaries committed**
 * **Execution status:** all commands above executed successfully; no UNVERIFIED result is presented as verified.
