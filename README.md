@@ -51,6 +51,18 @@ python video/build_video.py --glb assets/ours-photoreal.glb --audio assets/voice
 
 If Blender is not on PATH, provide `--blender "C:\\Program Files\\Blender Foundation\\Blender 4.5\\blender.exe"`. If the face is oriented away from the camera, pass `--front positive-y`.
 
+### M001.1: fast portrait and expression checks
+
+The first real Blender 4.5 still succeeded but was overexposed and showed too much uncovered torso. The new **studio** preset crops toward the face, reduces light levels, includes a dark slate background and overlays a temporary navy shirt *material* on the existing torso mesh (no geometry or rig edits). Four diagnostic previews render in a single Blender process using 50% size and 16 EEVEE samples:
+
+```powershell
+git pull --ff-only
+$script = (Get-Content .\assets\voice_transcript.txt -Raw).Trim()
+python tools/local_check.py --glb .\assets\ours-photoreal.glb --audio .\assets\voice.wav --text "$script" --preview-set
+```
+
+Inspect `output/livynth_m001_neutral.png`, `_half_blink.png`, `_full_blink.png` and `_smile.png`. This is **local QA**, not yet photoreal or final video quality. See [the M001 checklist](docs/M001.md) for a one-second MP4 smoke test before rendering the entire 14-second clip.
+
 ### No GitHub Actions required
 
 GitHub Actions was disabled because the account has no runner credits. Run `python tools/local_check.py` on Windows or Linux to compile, run unit tests, inspect an optional GLB, and check an optional WAV-to-timeline run. Add `--preview` to invoke Blender when installed. None of these checks use GitHub-hosted runners.
