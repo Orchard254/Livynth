@@ -7,10 +7,10 @@ The `--stage1-neutral-dump` opt-in exports a compact, compressed `.npz` file wit
 From the existing experimental branch on Windows, with Blender 4.5 + MPFB:
 
 ```powershell
-$blender = 'C:\\Program Files\\Blender Foundation\\Blender 4.5\\blender.exe'
-& $blender --background --python tools/mpfb_headless_probe.py -- --json output/c001_geo05/neutral_dump_report.json --stage1-neutral-dump output/c001_geo05/neutral_mesh.npz
+$blender = 'C:\Program Files\Blender Foundation\Blender 4.5\blender.exe'
+& $blender --background --python tools/mpfb_headless_probe.py -- --out output/c001_geo05/neutral_dump_control.glb --json output/c001_geo05/neutral_dump_report.json --stage1-neutral-dump output/c001_geo05/neutral_mesh.npz
 if ($LASTEXITCODE -ne 0) { throw 'Neutral mesh capture failed' }
-Get-Content output\\c001_geo05\\neutral_dump_report.json | Select-String 'neutral_dump|positions_sha256|vertex_count|quad_face_count'
+Get-Content output\c001_geo05\neutral_dump_report.json | Select-String 'neutral_dump|positions_sha256|vertex_count|quad_face_count'
 ```
 
 **Expected source SHA:** `64b001da1ec4a4094cfa7ce1da3aee3b2a9da7d570492c6a56d76e78a47eb542`. If it differs, **stop** and investigate drift before choosing anchors.
