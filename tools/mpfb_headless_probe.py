@@ -48,6 +48,7 @@ def _parse_args():
     rig = "default"
     stage1_template = None
     stage1_constraints = None
+    stage1_neutral_dump = None
     i = 0
     while i < len(argv):
         if argv[i] == "--out" and i + 1 < len(argv):
@@ -70,10 +71,16 @@ def _parse_args():
             stage1_constraints = argv[i + 1]
             i += 2
             continue
+        if argv[i] == "--stage1-neutral-dump" and i + 1 < len(argv):
+            stage1_neutral_dump = argv[i + 1]
+            i += 2
+            continue
         i += 1
     if stage1_template and stage1_constraints:
         raise ValueError("--stage1-template and --stage1-constraints are exclusive")
-    return out, json_out, rig, stage1_template, stage1_constraints
+    if stage1_constraints and stage1_neutral_dump:
+        raise ValueError("Neutral mesh dump must be captured BEFORE a fit; do not combine with constraints")
+    return out, json_out, rig, stage1_template, stage1_constraints, stage1_neutral_dump
 
 
 def _clear_scene():
@@ -104,7 +111,7 @@ def _stash_armature_modifier(obj):
 
 
 def main() -> int:
-    out_glb, out_json, rig_name, stage1_template, stage1_constraints = _parse_args()
+    out_glb, out_json, rig_name, stage1_template, stage1_constraints, stage1_neutral_dump = _parse_args()
 
     import bpy
     from bl_ext.user_default.mpfb.services import (
@@ -273,13 +280,19 @@ def main() -> int:
     # ---- OPTIONAL Stage-1 geometric fit, BEFORE facial targets ----------
     # Without these flags the Stage-0 baseline execution path is unchanged.
     # A failed fit must NEVER produce a GLB named as a fitted candidate.
-    if stage1_template or stage1_constraints:
+    if stage1_template or stage1_constraints or stage1_neutral_dump:
         import stage1_blender_bridge
         if stage1_template:
             def _template():
                 report["stage1"] = stage1_blender_bridge.write_template(
                     new_bm, stage1_template)
             step("stage1_template", _template)
+        if stage1_neutral_dump:
+            import stage1_neutral_dump as neutral_dump_module
+            def _capture():
+                report["neutral_dump"] = neutral_dump_module.write_neutral_dump(
+                    new_bm, stage1_neutral_dump)
+            step("stage1_neutral_dump", _capture)
         if stage1_constraints:
             def _stage1():
                 report["stage1"] = stage1_blender_bridge.apply_constraints(
