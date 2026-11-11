@@ -69,7 +69,7 @@ class StudioTests(unittest.TestCase):
 
     def test_reject_fake_mp4(self):
         p=self.folder/'fake.mp4';p.write_bytes(b'not mp4'*30)
-        with self.assertRaisesRegex(RuntimeError, 'not an MP4'):
+        with self.assertRaisesRegex(ValueError, 'E_INVALID_MP4_BOX_SIZE'):
             studio.check_output(studio.Task('Video', (), p, 'mp4'))
 
     def test_reject_incomplete_glb_audit(self):

@@ -135,10 +135,8 @@ def check_output(task: Task):
             if f.read(8) != b'\x89PNG\r\n\x1a\n':
                 raise RuntimeError('Preview file is not a PNG')
     elif task.kind == 'mp4':
-        with p.open('rb') as f:
-            f.seek(4)
-            if f.read(4) != b'ftyp':
-                raise RuntimeError('Video file is not an MP4 container')
+        from video.mp4_probe import inspect_mp4
+        return inspect_mp4(p)
 
 
 def execute(tasks: list[Task], *, output_dir: Path, log, stop=None):
@@ -195,7 +193,10 @@ def execute(tasks: list[Task], *, output_dir: Path, log, stop=None):
                 proc.stdout.close()
             if rc:
                 raise RuntimeError(f'{task.title} failed (exit code {rc}). See the Studio log.')
-            check_output(task)
+            audit = check_output(task)
+            if task.kind == 'mp4':
+                report['video_audio_stream'] = 'TRACKS_PRESENT_UNVERIFIED_PLAYBACK'
+                report['mp4_tracks'] = audit
             report['steps'].append({'name': task.title, 'status': 'PASS_ARTIFACT',
                                     'output': str(task.artifact)})
             log(f'[LIVYNTH] Saved: {task.artifact}\n')
