@@ -1,6 +1,6 @@
 # IDENTITY-001 — Reusable 3D human foundation
 
-**Status: IMPLEMENTED + 15 standard-library local tests PASS; owner Windows Blender A/B run NOT YET RUN.**
+**Status: IMPLEMENTED; 18 standard-library recipe/comparator tests PASS in the authoring environment. Three exporter-argument tests and four Studio integration tests have been added but NOT run against the full repository here. Owner Windows Blender A/B run NOT YET RUN.**
 
 ## Purpose
 
@@ -12,10 +12,11 @@ One MPFB base topology and one rig/morph system should generate **different manu
 
 1. `character/identity_recipe.py`: strict JSON recipe schema `livynth.identity.recipe.v1`, finite [0,1] MPFB macro bounds, normalized MPFB `race` dictionary (API names, not inferred traits), stable SHA256 and no mutation of MPFB defaults.
 2. `tools/mpfb_headless_probe.py --identity-recipe path.json`: apply per-character MPFB macro parameters during `HumanService.create_human()`, **before rig export copy / baking / ARKit**. Existing no-flag Character 001 test baseline stays unchanged.
-3. Bake and record native neutral position SHA256 in `neutral_identity_geometry` prior to loading 67 expression targets. Do not confuse seam-split GLB vertex indices with Blender native indices.
+3. Bake and record native neutral position **and quad-topology** SHA256 values in `neutral_identity_geometry` prior to loading 67 expression targets. Do not confuse seam-split GLB vertex indices with Blender native indices.
 4. Export one GLB per character, preserving the 163-joint + 67-target contract if Blender actually succeeds. JSON audit includes recipe identity and source SHA.
-5. `tools/identity_compare.py`: fail if geometry is identical, native vertex count changes, either GLB lacks skin/163 joints/67 morphs, recipe fingerprint is the same, or exports failed. A PASS is **shape difference + structural compatibility only**, not likeness or expression quality.
-6. `tests/test_identity_recipe.py`: strict validation + positive/negative structural controls.
+5. `tools/identity_compare.py`: fail if geometry is identical, native vertices or quad connectivity change, skin/163 joints/67 morphs are missing, facial target or joint name lists disagree, UVs are missing, recipe fingerprints match, or exports failed. A PASS is **shape difference + structural compatibility only**, not likeness or expression quality.
+6. `tests/test_identity_recipe.py`: strict validation + positive/negative structural controls and exporter argument tests.
+7. Studio CLI and GUI accept an **optional identity recipe JSON** when creating a character. This is mutually exclusive with an existing GLB; all baseline behavior without a recipe remains unchanged.
 
 ## Windows acceptance commands
 
@@ -25,6 +26,7 @@ From the repo checkout on the **development branch** (after merge):
 cd C:\PROJECT\Livynth
 git pull --ff-only
 python -m unittest tests.test_identity_recipe -v
+python tools/local_check.py
 $blender = "C:\Program Files\Blender Foundation\Blender 4.5\blender.exe"
 
 & $blender --background --python tools/mpfb_headless_probe.py -- --identity-recipe character/recipes/demo_a.json --out output/identity/demo_a.glb --json output/identity/demo_a.json
@@ -36,7 +38,7 @@ python tools/identity_compare.py --a output/identity/demo_a.json --b output/iden
 if ($LASTEXITCODE -ne 0) { throw "Character identity A/B gate failed" }
 ```
 
-Do not run full 1080x1920 video exports at this stage. The test produces GLBs and small JSONs only; outputs are gitignored.
+Studio can also use the recipe in its **Identity recipe (optional)** file selector or with `python livynth_studio.py --cli --mode preview --identity-recipe character/recipes/demo_b.json`. Do not run full 1080x1920 video exports at this stage. The test produces GLBs and small JSONs only; outputs are gitignored.
 
 To review appearance and animation later, render two cheap portrait stills with the same `video/build_video.py` renderer and a **single common voice WAV**, then inspect neutral/blink/jaw. Structural morph count is not proof that the controls look correct on both identities.
 
