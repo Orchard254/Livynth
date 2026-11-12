@@ -123,7 +123,7 @@ def _audit_jaw_and_visemes(body,assets,*,use_oral_correctives=False):
     return reports
 
 
-def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False,mhclo_dentition=False):
+def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False,mhclo_dentition=False,rigged_seam_probe=False):
     import bpy
     import numpy as np
     from bl_ext.user_default.mpfb.services import (
@@ -135,6 +135,9 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
         raise ValueError('E_ORAL_CORRECTIVES_REQUIRE_ALIGNMENT_AND_AUDIT')
     if mhclo_dentition and not oral_correctives:
         raise ValueError('E_MHCLO_DENTITION_NEEDS_ORAL_CORRECTIVES')
+    if rigged_seam_probe and any((
+            align_accessories,audit_oral_motion,oral_correctives,mhclo_dentition)):
+        raise ValueError('E_RIGGED_SEAM_PROBE_ISOLATED_ONLY')
     output=Path(output).resolve()
     if output.exists() or output.is_symlink():
         raise FileExistsError('E_ANATOMY_POSE_OUTPUT_EXISTS')
@@ -203,6 +206,47 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
             not any(m.type=='ARMATURE' and m.object==copy_rig
                     for m in obj.modifiers)):
             raise RuntimeError('E_COPIED_ASSET_RIG_MISMATCH_'+obj.name)
+
+    if rigged_seam_probe:
+        # IDENTITY-021 must stop BEFORE head deformation, FaceService morphs,
+        # oral correctives, camera setup or any render. Mutate only a disposable
+        # third copy of the rigged teeth mesh, never the source/export objects.
+        from bl_ext.user_default.mpfb.entities.clothes.mhclo import Mhclo
+        from tools.rigged_seam_copy_probe import prove_rigged_teeth_seam
+        dental_source=next(x for x in resolved if x['category']=='teeth')
+        teeth_meta=Mhclo()
+        teeth_meta.load(dental_source['_absolute_path_for_blender_only'])
+        report={
+            'schema':'livynth.mhclo.rigged-seam-probe.v1',
+            'character':character,
+            'source_teeth_sha256':dental_source['sha256'],
+            'human_created_in_memory':True,
+            'source_asset_modified':False,
+            'existing_glbs_modified':False,
+            'render_started':False,
+        }
+        try:
+            report.update(prove_rigged_teeth_seam(
+                source_assets['teeth'],actual_assets['teeth'],copy_rig,
+                teeth_meta))
+        except Exception as exc:
+            report.update({
+                'status':'FAIL_RIGGED_SEAM_COPY_NOT_PRODUCTION_QA',
+                'error_type':type(exc).__name__,
+                'error':str(exc),
+                'visual_quality':'NOT_TESTED',
+                'facial_motion':'NOT_TESTED',
+            })
+        (output/'rigged_seam_probe.json').write_text(
+            json.dumps(report,indent=2)+'\n',encoding='utf-8')
+        print('[LIVYNTH RIGGED SEAM] '+json.dumps({
+            'status':report['status'],
+            'error':report.get('error'),
+            'report':str((output/'rigged_seam_probe.json').resolve()),
+        },indent=2),flush=True)
+        if report['status'].startswith('FAIL_'):
+            raise RuntimeError('E_RIGGED_SEAM_PROBE_FAILED: '+str(report.get('error')))
+        return report
 
     dental_mask=None
     dental_mapping_audit=None
@@ -361,6 +405,8 @@ if __name__=='__main__':
     parser.add_argument('--character',choices=('demo_head_a','demo_head_b'),required=True)
     parser.add_argument('--plan',type=Path,required=True)
     parser.add_argument('--out',type=Path,required=True)
+    parser.add_argument('--rigged-seam-probe',action='store_true',
+                        help='IDENTITY-021 disposable rigged-teeth geometry check; no render')
     parser.add_argument('--mhclo-dentition',action='store_true',
                         help='Use original MPFB teeth helper mapping instead of visual Z split')
     parser.add_argument('--oral-correctives',action='store_true',
@@ -372,4 +418,5 @@ if __name__=='__main__':
     args=parser.parse_args(sys.argv[sys.argv.index('--')+1:])
     run(args.character,args.plan,args.out,align_accessories=args.align_accessories,
         audit_oral_motion=args.audit_oral_motion,oral_correctives=args.oral_correctives,
-        mhclo_dentition=args.mhclo_dentition)
+        mhclo_dentition=args.mhclo_dentition,
+        rigged_seam_probe=args.rigged_seam_probe)
