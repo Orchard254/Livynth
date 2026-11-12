@@ -326,6 +326,38 @@ Original Character 001 five-angle likeness Phase-3 remains FAIL.
 Owner next one-command gate after pull:
 python tools/run_anatomy_ab_review.py
 See docs/IDENTITY_ANATOMY_AB_011.md.
+## IDENTITY-011 owner Windows A/B anatomy poses: visual FAIL (2026-11-12)
+
+Owner uploaded 20261112_071835_969382.zip (3,161,955 bytes); all
+16 SHA256-manifested ZIP files independently verified. Both different
+heads have unchanged source body hash/topology, 13,380 native vertices,
+13,378 quads, 163 joints and 67 morphs, plus three rig-bound MPFB assets.
+Blender rendered all 12 requested front and three-quarter pose stills.
+
+**INDEPENDENT VISUAL VERDICT:** Head A's eyes are roughly seated and blink
+closes; Head B's eyeballs visibly protrude, failing eyelid alignment
+and blink. Head B also shows detached red/oral artifacts near nose and
+mouth during jawOpen/AA. Eye/teeth/tongue bone attachment being present
+does NOT prove alignment when facial identity changes. Production anatomy
+approval = FAIL. Actual red artifact object identity remains unverified.
+See docs/IDENTITY_ANATOMY_ALIGNMENT_012.md.
+
+## IDENTITY-012 — shared body identity deformation on copied anatomy
+
+Added opt-in --align-accessories for the existing isolated
+tools/run_anatomy_ab_review.py. The same six facial shape fields are
+evaluated on copied eye, teeth and tongue vertices using fixed native
+body bounds and body-local transforms. No original files, rig weights
+or GLBs are edited. Blender will record per-asset displacement and
+float32 re-read checks and render the same 12 pose images for objective
+comparison. Added 11 focused regression tests for the shared spatial
+reference, opt-in separation, and invalid/missing audit controls.
+
+**NEW BLENDER RUN AND THESE TESTS NOT EXECUTED YET ON WINDOWS.**
+No guarantee this correction succeeds: it could worsen Head A or
+leave teeth/tongue fixed relative to jawOpen, since jaw is a morph.
+After verification, request the resulting ZIP for review. Keep
+Character 001 five-view likeness Phase-3 FAIL and main untouched.
 ## Explicit next acceptance gates
 
 1. **Owner Windows integrated smoke**: open the Studio, inspect actual neutral PNG, render a 30-frame MP4 and confirm it visually plays with audible speech; save `studio_run.json` and Blender diagnostics. Fail any stage that is black, visually incorrect, silent, or crashes. Repeat with `--mode demo` before release.
