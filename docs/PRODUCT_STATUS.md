@@ -358,6 +358,49 @@ No guarantee this correction succeeds: it could worsen Head A or
 leave teeth/tongue fixed relative to jawOpen, since jaw is a morph.
 After verification, request the resulting ZIP for review. Keep
 Character 001 five-view likeness Phase-3 FAIL and main untouched.
+## IDENTITY-012 independent static anatomy alignment PASS — 2026-11-12
+
+Owner submitted 20261112_074842_628509.zip, SHA256
+`68a86213bc91efaa81726760fa5df2d788548c36741375b0e327ceb5d91e8e0b`.
+All 16 manifest files independently matched actual ZIP contents. Twelve
+rendered poses were compared to the previous failing archive
+`20261112_071835_969382.zip`: Head B's protruding neutral eyes are
+corrected, its full-blink now covers the eyeballs, and the detached red
+fragments beside the nose/mouth are no longer visible in jawOpen/AA.
+Head A's previously good neutral eyes and full blink remain intact.
+
+Both identities remain structurally compatible: identical source neutral
+SHA and 13,378-quad topology, 13,380 baked body vertices, 163 bones,
+67 identical named facial targets, distinct detailed head shape hashes.
+All attached anatomy vertex counts/armature bindings are preserved.
+**Verdict: PASS for static detailed-face anatomy alignment ONLY.**
+Realistic oral appearance, bone/shape morph jaw coordination, temporal
+animation and photographic Character 001 likeness remain unapproved.
+Full before/after review in docs/IDENTITY_ORAL_MOTION_013.md.
+
+## IDENTITY-013 — evaluated teeth/tongue jaw-follow diagnostic
+
+The body receives jawOpen/AA morph targets whereas teeth/tongue are
+separate armature-bound meshes. Existing success proves static positioning,
+not that the oral meshes move when only body morph weights change.
+Added opt-in `--audit-oral-motion` to the working A/B anatomy review.
+Blender snapshots dependency-graph evaluated world-space vertices for
+body, teeth and tongue in neutral, jawOpen and AA poses. Reports
+separate body-morph-inert, oral-assets-static, partial and motion-present
+outcomes, with exact per-mesh displacement metrics and consistency gates.
+
+Fourteen focused regression tests are authored but have NOT been run
+on the owner's Windows checkout. Blender motion audit is also NOT RUN.
+The original no-flag run and existing GLBs are unchanged. On Windows:
+
+    python -m unittest discover -s tests -p "test_anatomy_motion_audit.py" -v
+    python tools/run_anatomy_ab_review.py --align-accessories --audit-oral-motion
+
+The new ZIP contains the same 12 diagnostic stills and numerical
+body/teeth/tongue motion evidence. If the body morphs but oral meshes
+stay still, implement jaw/corrective retargeting with a separate gate.
+Do not weaken the strict 163/67, shape and static alignment checks.
+Image-driven five-view likeness remains Phase-3 FAIL.
 ## Explicit next acceptance gates
 
 1. **Owner Windows integrated smoke**: open the Studio, inspect actual neutral PNG, render a 30-frame MP4 and confirm it visually plays with audible speech; save `studio_run.json` and Blender diagnostics. Fail any stage that is black, visually incorrect, silent, or crashes. Repeat with `--mode demo` before release.

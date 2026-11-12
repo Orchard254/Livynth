@@ -73,7 +73,47 @@ def _set_morphs(body,weights):
     bpy.context.view_layer.update()
 
 
-def run(character,plan_file,output,*,align_accessories=False):
+def _evaluated_world_vertices(objects):
+    """Snapshot Blender dependency-graph evaluated mesh positions in world space.
+
+    This captures skinning, morphs, object transforms and any other modifiers.
+    Reading original mesh.data coordinates would miss armature animation.
+    """
+    import bpy
+    import numpy as np
+    bpy.context.view_layer.update()
+    depsgraph=bpy.context.evaluated_depsgraph_get()
+    depsgraph.update()
+    result={}
+    for name,obj in objects.items():
+        evaluated=obj.evaluated_get(depsgraph)
+        mesh=evaluated.to_mesh()
+        if mesh is None:
+            raise RuntimeError('E_EVALUATED_ASSET_MESH_'+name)
+        try:
+            matrix=evaluated.matrix_world
+            result[name]=np.asarray([tuple(matrix @ v.co) for v in mesh.vertices],
+                                    dtype=np.float64)
+        finally:
+            evaluated.to_mesh_clear()
+    return result
+
+
+def _audit_jaw_and_visemes(body,assets):
+    from character.anatomy_motion_audit import diagnose_oral_motion
+    objects={'body':body,'teeth':assets['teeth'],'tongue':assets['tongue']}
+    _set_morphs(body,{})
+    before=_evaluated_world_vertices(objects)
+    reports={}
+    for pose in ('jaw_open','viseme_aa'):
+        _set_morphs(body,POSES[pose])
+        after=_evaluated_world_vertices(objects)
+        reports[pose]=diagnose_oral_motion(before,after,pose=pose)
+    _set_morphs(body,{})
+    return reports
+
+
+def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=False):
     import bpy
     import numpy as np
     from bl_ext.user_default.mpfb.services import (
@@ -204,6 +244,8 @@ def run(character,plan_file,output,*,align_accessories=False):
     camera_and_lights(scene,list(actual_assets.values())+[body],
                       'negative-y','studio')
 
+    oral_motion_audit=_audit_jaw_and_visemes(body,actual_assets) if audit_oral_motion else None
+
     images=[]
     for label,weights in POSES.items():
         _set_morphs(body,weights)
@@ -226,6 +268,9 @@ def run(character,plan_file,output,*,align_accessories=False):
         'anatomy_alignment_mode':(
             'shared_identity_field' if align_accessories else 'original_mpfb_fit'),
         'anatomy_alignment_audit':alignment_audits,
+        'oral_motion_audit':oral_motion_audit,
+        'oral_motion_status':('RECORDED_DO_NOT_INFER_VISUAL_APPROVAL'
+                              if oral_motion_audit else 'NOT_RUN'),
         'assets':[
             {'category':cat,'source_sha256':entry['sha256'],
              'mesh_vertices':len(actual_assets[cat].data.vertices),
@@ -252,7 +297,10 @@ if __name__=='__main__':
     parser.add_argument('--character',choices=('demo_head_a','demo_head_b'),required=True)
     parser.add_argument('--plan',type=Path,required=True)
     parser.add_argument('--out',type=Path,required=True)
+    parser.add_argument('--audit-oral-motion',action='store_true',
+                        help='Measure evaluated teeth/tongue world motion for jawOpen and AA')
     parser.add_argument('--align-accessories',action='store_true',
                         help='Apply same detailed identity field to copied eyes/teeth/tongue')
     args=parser.parse_args(sys.argv[sys.argv.index('--')+1:])
-    run(args.character,args.plan,args.out,align_accessories=args.align_accessories)
+    run(args.character,args.plan,args.out,align_accessories=args.align_accessories,
+        audit_oral_motion=args.audit_oral_motion)
