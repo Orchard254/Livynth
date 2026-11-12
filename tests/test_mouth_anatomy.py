@@ -7,9 +7,11 @@ import numpy as np
 from tools.mouth_anatomy import (
     SCHEMA,UPPER_SEAT_M,TONGUE_SEAT_M,TOOTH_SCALE,LIP_MAX_PUSH_M,
     LIP_Z_CENTER,LIP_Z_HALF_SPAN,LIP_X_HALF_SPAN,MIN_TOOTH_SCALE,MAX_TOOTH_SCALE,
+    TONGUE_SCALE,TONGUE_SHIFT_Y_M,MAX_TONGUE_SHIFT_Y_M,
     TEETH_GUM_TONE,TEETH_GUM_MUTE_STRENGTH,
     validate_seat,plan_masked_translation,plan_translation,
     plan_cavity_faces,cavity_z_window,validate_tooth_scale,validate_lip_push,
+    validate_tongue_scale,validate_tongue_shift_y,sha256_of_float_array,
     plan_uniform_scale,plan_lip_soften,validate_polygon_correspondence,
     nearest_triangle_distances,distance_summary,
     classify_gum_pixels,mute_gum_pixels,
@@ -634,7 +636,10 @@ class DescribeCrossingTests(unittest.TestCase):
 
 class ConstantSanityTests(unittest.TestCase):
     def test_pinned_constants(self):
-        self.assertEqual(TONGUE_SEAT_M,0.024)
+        self.assertEqual(TONGUE_SEAT_M,0.036)
+        self.assertEqual(TONGUE_SCALE,0.80)
+        self.assertEqual(TONGUE_SHIFT_Y_M,0.010)
+        self.assertEqual(MAX_TONGUE_SHIFT_Y_M,0.010)
         self.assertEqual(UPPER_SEAT_M,0.022)
         self.assertEqual(TOOTH_SCALE,0.85)
         self.assertEqual(LIP_MAX_PUSH_M,0.010)
@@ -702,6 +707,120 @@ class GumClassificationTests(unittest.TestCase):
             mute_gum_pixels(rgb,tone=(0.1,float('nan'),0.1),strength=0.8)
         with self.assertRaisesRegex(MouthAnatomyError,'E_GUM_STRENGTH'):
             mute_gum_pixels(rgb,tone=(0.3,0.15,0.14),strength=1.5)
+
+
+class MillimetreScaleDetectorTests(unittest.TestCase):
+    """Regression for the IDENTITY-027 detector correction.
+
+    The oral facets are ~2-6 mm across; the barycentric area determinant
+    scales with the SQUARE of the edge length, so an absolute 1e-9 test
+    silently rejected every transversal crossing on triangles smaller
+    than ~5.6 mm. The predicate now uses RELATIVE angle/area tolerances.
+    """
+
+    def _mm(self):
+        b = np.array([[-2e-3, -1.5e-3, 0.0],
+                      [2e-3, -1.5e-3, 0.0],
+                      [0.0, 2.5e-3, 0.0]])
+        a = np.array([[-1e-3, 0.0, -3e-3],
+                      [1e-3, 0.0, 3e-3],
+                      [0.0, 1.5e-3, 1e-3]])
+        return a, b
+
+    def test_mm_scale_transversal_crossing_detected(self):
+        a, b = self._mm()
+        result = count_intersecting_triangle_pairs(a[None], b[None])
+        self.assertEqual(result['pairs'], 1)
+
+    def test_mm_scale_describe_reports_locations(self):
+        a, b = self._mm()
+        result = describe_intersecting_triangle_pairs(a[None], b[None])
+        self.assertEqual(result['pairs'], 1)
+        detail = result['pair_details'][0]
+        self.assertEqual(detail['pair'], [0, 0])
+        centroid = np.array(detail['centroid_m'])
+        np.testing.assert_allclose(centroid[:2], [0.0, 1.0e-3 / 6],
+                                   atol=1e-6)
+        self.assertGreater(detail['crossing_depth_estimate_m'], 1e-3)
+        self.assertEqual(result['summary']['pairs'], 1)
+
+    def test_coplanar_mm_overlap_not_counted(self):
+        a, b = self._mm()
+        a_flat = a.copy()
+        a_flat[:, 2] = 0.0  # coplanar with b: sliding contact, not penetration
+        result = count_intersecting_triangle_pairs(a_flat[None], b[None])
+        self.assertEqual(result['pairs'], 0)
+
+    def test_degenerate_face_never_crossing(self):
+        a, b = self._mm()
+        degenerate = np.array([[0.0, 0.0, 0.0], [1e-3, 0.0, 0.0],
+                               [2e-3, 0.0, 0.0]])  # collinear
+        self.assertEqual(
+            count_intersecting_triangle_pairs(a[None], degenerate[None])['pairs'],
+            0)
+        self.assertEqual(
+            count_intersecting_triangle_pairs(degenerate[None], b[None])['pairs'],
+            0)
+
+    def test_count_and_describe_agree_mm(self):
+        a, b = self._mm()
+        tris_a = np.repeat(a[None], 3, axis=0)
+        counted = count_intersecting_triangle_pairs(tris_a, b[None])
+        described = describe_intersecting_triangle_pairs(tris_a, b[None])
+        self.assertEqual(counted['pairs'], 3)
+        self.assertEqual(counted['pairs'], described['pairs'])
+
+
+class TongueScaleShiftValidationTests(unittest.TestCase):
+    def test_default_in_range(self):
+        self.assertEqual(validate_tongue_scale(TONGUE_SCALE), TONGUE_SCALE)
+        self.assertEqual(validate_tongue_shift_y(TONGUE_SHIFT_Y_M),
+                         TONGUE_SHIFT_Y_M)
+        self.assertLessEqual(TONGUE_SHIFT_Y_M, MAX_TONGUE_SHIFT_Y_M)
+
+    def test_scale_bounds(self):
+        self.assertEqual(validate_tongue_scale(1.0), 1.0)
+        for bad in (0.59, 1.31, True, float('nan'), float('inf')):
+            with self.assertRaises(MouthAnatomyError):
+                validate_tongue_scale(bad)
+
+    def test_shift_bounds(self):
+        self.assertEqual(validate_tongue_shift_y(0.0), 0.0)
+        self.assertEqual(validate_tongue_shift_y(MAX_TONGUE_SHIFT_Y_M),
+                         MAX_TONGUE_SHIFT_Y_M)
+        for bad in (-0.001, MAX_TONGUE_SHIFT_Y_M + 1e-9,
+                    True, float('nan'), float('inf')):
+            with self.assertRaises(MouthAnatomyError):
+                validate_tongue_shift_y(bad)
+
+    def test_combined_translation_validated_by_norm(self):
+        pts = np.zeros((226, 3)) + [0, -0.1, 1.55]
+        moved, audit = plan_translation(pts, dy=0.004, dz=-0.024,
+                                        label='TONGUE')
+        self.assertEqual(audit['translation_body_m'][0], 0.0)
+        self.assertEqual(audit['translation_body_m'][1], 0.004)
+        self.assertEqual(audit['translation_body_m'][2], -0.024)
+        np.testing.assert_allclose(moved[:, 0], pts[:, 0], atol=1e-12)
+        with self.assertRaisesRegex(MouthAnatomyError, 'E_TRANSLATION_'):
+            plan_translation(pts, dy=0.03, dz=-0.04)  # norm 0.05 > 0.045
+
+
+class ArrayHashTests(unittest.TestCase):
+    def test_digest_stable_and_content_sensitive(self):
+        rng = np.random.default_rng(11)
+        a = rng.uniform(0, 1, size=(8, 8, 3)).astype(np.float32)
+        b = a.copy()
+        self.assertEqual(sha256_of_float_array(a),
+                         sha256_of_float_array(b))
+        b[0, 0, 0] = np.float32(a[0, 0, 0] + np.float32(1e-7))
+        self.assertNotEqual(sha256_of_float_array(a),
+                            sha256_of_float_array(b))
+
+    def test_digest_hex_length(self):
+        a = np.zeros((2, 2, 4), dtype=np.float32)
+        digest = sha256_of_float_array(a)
+        self.assertEqual(len(digest), 64)
+        int(digest, 16)
 
 
 if __name__=='__main__':

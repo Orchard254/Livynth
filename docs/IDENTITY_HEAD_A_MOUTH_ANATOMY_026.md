@@ -1,5 +1,8 @@
 # LIVYNTH IDENTITY-026 — Head A mouth anatomy, second pass (pink surface, dental size, lip contour, cavity mismatch)
 
+> **Superseded by IDENTITY-027 (2026-11-12):** the collision counts in this report were measured with the pre-correction millimetre-scale predicate (absolute barycentric-area epsilon). The detector was corrected; the arch-arch counts re-measured 1039/768/369 (not 12/6/12), tongue<->teeth crossings are now ZERO in all four poses, and material isolation is proven per slot. See docs/IDENTITY_HEAD_A_MOUTH_ANATOMY_027.md.
+
+
 **Date:** 2026-11-12 · **Branch:** `fix/head-a-mouth-anatomy` (stacked on
 `diagnostic/identity-024-dental-arch-isolation`, tip `2105a59`) ·
 **Blender:** 4.5.10 LTS (Windows) · **MPFB build:** 20261010 ·

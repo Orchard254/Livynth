@@ -29,7 +29,8 @@ class MouthAnatomyError(ValueError):
 
 
 def command(blender,asset_plan,output,upper_seat=None,tongue_seat=None,
-            tooth_scale=None,lip_push=None):
+            tooth_scale=None,lip_push=None,
+            tongue_scale=None,tongue_shift_y=None):
     cmd=[
         str(blender),'--background','--python',
         str(ROOT/'tools/mpfb_anatomy_ab_blender.py'),'--',
@@ -46,6 +47,10 @@ def command(blender,asset_plan,output,upper_seat=None,tongue_seat=None,
         cmd+=['--tooth-scale',str(float(tooth_scale))]
     if lip_push is not None:
         cmd+=['--lip-push',str(float(lip_push))]
+    if tongue_scale is not None:
+        cmd+=['--tongue-scale',str(float(tongue_scale))]
+    if tongue_shift_y is not None:
+        cmd+=['--tongue-shift-y',str(float(tongue_shift_y))]
     return cmd
 
 
@@ -129,6 +134,32 @@ def validate_report(data,output):
             not isinstance(fix.get('cavity_validated_polygons'),int) or
             fix['cavity_validated_polygons']!=fix.get('cavity_total_faces') or
             not isinstance(fix.get('collision_audits'),dict) or
+            not isinstance(fix.get('material_isolation'),dict) or
+            fix['material_isolation'].get('method')!=
+                'SINGLE_USER_MATERIAL_COPIES_AND_IN_MEMORY_IMAGE_COPIES' or
+            not isinstance(fix['material_isolation'].get('copies_created'),int) or
+            fix['material_isolation']['copies_created']<2 or
+            fix['material_isolation'].get('original_materials_unchanged') is not True or
+            fix['material_isolation'].get('original_images_unchanged') is not True or
+            fix['material_isolation'].get('installed_image_files_unchanged') is False or
+            not isinstance(fix['material_isolation'].get('tongue_slots'),list) or
+            not fix['material_isolation']['tongue_slots'] or
+            any(entry.get('original_material_unchanged') is not True
+                for entry in fix['material_isolation']['tongue_slots']) or
+            not isinstance(fix['material_isolation'].get('teeth_slots'),list) or
+            not fix['material_isolation']['teeth_slots'] or
+            any(entry.get('original_material_unchanged') is not True or
+                entry.get('original_image_unchanged') is not True or
+                entry.get('installed_image_file_unchanged') is False
+                for entry in fix['material_isolation']['teeth_slots']) or
+            fix.get('material_isolation_verified') is not True or
+            fix.get('tongue_scale') is None or
+            fix['tongue_scale'].get('operation')!='UNIFORM_SCALE_ABOUT_PIVOT' or
+            fix['tongue_scale'].get('shape_key_blocks_scaled')!=3 or
+            not isinstance(fix.get('tongue_scale_value'),(int,float)) or
+            not (0.60<=fix['tongue_scale_value']<=1.30) or
+            not isinstance(fix.get('tongue_shift_y_m'),(int,float)) or
+            not (0.0<=fix['tongue_shift_y_m']<=0.010) or
             any(pose not in fix['collision_audits'] for pose in
                 ('jaw_open_0_85','neutral','viseme_aa_0_90','viseme_pp_0_90')) or
             any(not isinstance(fix['collision_audits'][pose],dict) or
@@ -167,6 +198,12 @@ def validate_report(data,output):
             after.get('status')!='PASS_LOWER_JAW_MOTION_UPPER_STABLE_NOT_VISUAL_QA'):
         raise MouthAnatomyError('E_ID025_AFTER_FIX_MOTION')
 
+    reverify=data.get('installed_mhclo_reverified')
+    if (not isinstance(reverify,dict) or set(reverify)!={'eyes','teeth','tongue'} or
+            any(not isinstance(v,dict) or v.get('unchanged') is not True
+                for v in reverify.values())):
+        raise MouthAnatomyError('E_ID027_INSTALLED_MHCLO_RECHECK')
+
     images=data.get('images')
     if (not isinstance(images,list) or
             [entry.get('filename') for entry in images
@@ -179,13 +216,16 @@ def validate_report(data,output):
 
 
 def run(blender,asset_plan,output,*,execute=subprocess.run,
-        upper_seat=None,tongue_seat=None,tooth_scale=None,lip_push=None):
+        upper_seat=None,tongue_seat=None,tooth_scale=None,lip_push=None,
+        tongue_scale=None,tongue_shift_y=None):
     output=Path(output).resolve()
     if output.exists() or output.is_symlink():
         raise FileExistsError('E_ID025_OUTPUT_EXISTS')
     complete=execute(command(blender,asset_plan,output,
                              upper_seat=upper_seat,tongue_seat=tongue_seat,
-                             tooth_scale=tooth_scale,lip_push=lip_push),
+                             tooth_scale=tooth_scale,lip_push=lip_push,
+                             tongue_scale=tongue_scale,
+                             tongue_shift_y=tongue_shift_y),
                      cwd=str(ROOT),check=False)
     report_path=output/'anatomy_pose_report.json'
     if not report_path.is_file():
@@ -216,6 +256,8 @@ def main(argv=None):
     parser.add_argument('--tongue-seat',type=float,default=None)
     parser.add_argument('--tooth-scale',type=float,default=None)
     parser.add_argument('--lip-push',type=float,default=None)
+    parser.add_argument('--tongue-scale',type=float,default=None)
+    parser.add_argument('--tongue-shift-y',type=float,default=None)
     args=parser.parse_args(argv)
     from livynth_studio import find_blender
     output=args.out or (ROOT/'output/mouth_anatomy'/
@@ -223,7 +265,9 @@ def main(argv=None):
     try:
         data,archive=run(find_blender(args.blender),args.plan,output,
                          upper_seat=args.upper_seat,tongue_seat=args.tongue_seat,
-                         tooth_scale=args.tooth_scale,lip_push=args.lip_push)
+                         tooth_scale=args.tooth_scale,lip_push=args.lip_push,
+                         tongue_scale=args.tongue_scale,
+                         tongue_shift_y=args.tongue_shift_y)
     except (OSError,ValueError,RuntimeError) as exc:
         parser.exit(2,'LIVYNTH IDENTITY-025 FAIL: '+str(exc)+
                     '\nGenerated files if any: '+str(output)+'\n')
@@ -234,8 +278,19 @@ def main(argv=None):
         'images':list(POSE_IMAGES),
         'upper_seat_m':data['mouth_anatomy_audit']['upper_seat_m'],
         'tongue_seat_m':data['mouth_anatomy_audit']['tongue_seat_m'],
+        'tongue_shift_y_m':data['mouth_anatomy_audit']['tongue_shift_y_m'],
         'tooth_scale':data['mouth_anatomy_audit']['tooth_scale_value'],
+        'tongue_scale':data['mouth_anatomy_audit']['tongue_scale_value'],
         'cavity_faces':data['mouth_anatomy_audit']['cavity_faces'],
+        'material_isolation':{
+            key:data['mouth_anatomy_audit']['material_isolation'][key]
+            for key in ('method','copies_created','original_materials_unchanged',
+                        'original_images_unchanged',
+                        'installed_image_files_checked',
+                        'installed_image_files_unchanged')},
+        'material_isolation_verified':
+            data['mouth_anatomy_audit']['material_isolation_verified'],
+        'installed_mhclo_reverified':data['installed_mhclo_reverified'],
         'collision_audits':{
             pose:{
                 'arch_pairs':audit['upper_lower_arch_intersections']['pairs'],

@@ -176,24 +176,82 @@ def _scale_asset_in_body_space(body,asset,scale,*,label='ASSET'):
     return audit
 
 
+def _sha256_file(path):
+    import hashlib
+    path = Path(path)
+    digest = hashlib.sha256()
+    with path.open('rb') as source:
+        for chunk in iter(lambda: source.read(65536), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _hash_tree_images_pixels(tree):
+    """sha256 of every TexImage image's pixels referenced by a node tree."""
+    import numpy as np
+    from tools.mouth_anatomy import sha256_of_float_array
+    entries=[]
+    for node in tree.nodes:
+        if node.bl_idname!='ShaderNodeTexImage' or node.image is None:
+            continue
+        image=node.image
+        width,height=image.size
+        if width==0 or height==0:
+            continue
+        count=width*height
+        pixels=np.empty(count*4,dtype=np.float32)
+        image.pixels.foreach_get(pixels)
+        entries.append({'node':node.name,'image':image.name,
+                        'width':int(width),'height':int(height),
+                        'sha256':sha256_of_float_array(pixels)})
+    return entries
+
+
+def _hash_tree_images_files(tree):
+    """sha256 of every on-disk file backing a TexImage image in a tree."""
+    entries=[]
+    for node in tree.nodes:
+        if node.bl_idname!='ShaderNodeTexImage' or node.image is None:
+            continue
+        filepath=node.image.filepath if (node.image.filepath or '') else ''
+        if filepath and Path(filepath).is_file():
+            entries.append({'image':node.image.name,
+                            'file':str(Path(filepath)),
+                            'sha256':_sha256_file(Path(filepath))})
+    return entries
+
+
 def _mute_tongue_material(tongue,saturation,value):
     """Desaturate/darken the copied tongue asset's diffuse contribution.
 
-    Inserts a Hue/Saturation/Value node between the image texture and the
-    Principled BSDF Base Color of every copied tongue slot. The installed
-    MPFB asset and its .mhmat/.png are never opened for writing. Hard
-    error when the expected node graph is missing (no silent skip).
+    Operates on a SINGLE-USER COPY of every copied tongue material slot
+    (original datablocks - which may be shared with the source human - are
+    never edited). Inserts a Hue/Saturation/Value node between the image
+    texture and the Principled BSDF Base Color of every isolated copy.
+    The installed MPFB asset and its .mhmat/.png are never opened for
+    writing. Hard error when the expected node graph is missing (no
+    silent skip).
     """
     import colorsys
     applied=[]
+    isolation=[]
     if not tongue.data.materials:
         raise RuntimeError('E_MOUTH_ANATOMY_TONGUE_MATERIAL_MISSING')
     for slot_index,material in enumerate(tongue.data.materials):
         if material is None:
             continue
-        if not material.use_nodes:
-            material.use_nodes=True
-        tree=material.node_tree
+        original=material
+        original_nodes=int(len(original.node_tree.nodes)) if original.use_nodes else None
+        original_users=int(original.users)
+        images_before=_hash_tree_images_pixels(
+            original.node_tree) if original.use_nodes else []
+        image_files_before=_hash_tree_images_files(
+            original.node_tree) if original.use_nodes else []
+        iso=original.copy()  # single-user copy: the original stays pristine
+        tongue.data.materials[slot_index]=iso
+        if not iso.use_nodes:
+            iso.use_nodes=True
+        tree=iso.node_tree
         principled=next((n for n in tree.nodes
                          if n.bl_idname=='ShaderNodeBsdfPrincipled'),None)
         if principled is None:
@@ -207,54 +265,99 @@ def _mute_tongue_material(tongue,saturation,value):
             ns,nv=s*float(saturation),v*float(value)
             r,g,b=colorsys.hsv_to_rgb(h,ns,nv)
             principled.inputs['Base Color'].default_value=(r,g,b,col[3])
-            applied.append({'material':material.name,'slot':slot_index,
+            applied.append({'material':iso.name,'slot':slot_index,
                             'mode':'FLAT_COLOR_RESCALE',
                             'saturation':float(saturation),
                             'value':float(value)})
-            continue
-        for link in list(links):
-            source_socket=link.from_socket
-            tree.links.remove(link)
-            hsv=tree.nodes.new('ShaderNodeHueSaturation')
-            hsv.name='livynth_tongue_mute'
-            hsv.label='LIVYNTH IDENTITY-026 tongue mute'
-            hsv.inputs['Hue'].default_value=0.5
-            hsv.inputs['Saturation'].default_value=float(saturation)
-            hsv.inputs['Value'].default_value=float(value)
-            hsv.inputs['Fac'].default_value=1.0
-            hsv.location=(source_socket.node.location.x+220.0,
-                          source_socket.node.location.y)
-            tree.links.new(source_socket,hsv.inputs['Color'])
-            tree.links.new(hsv.outputs['Color'],
-                           principled.inputs['Base Color'])
-            applied.append({'material':material.name,'slot':slot_index,
-                            'mode':'HSV_NODE_INSERTED',
-                            'saturation':float(saturation),
-                            'value':float(value)})
+        else:
+            for link in list(links):
+                source_socket=link.from_socket
+                tree.links.remove(link)
+                hsv=tree.nodes.new('ShaderNodeHueSaturation')
+                hsv.name='livynth_tongue_mute'
+                hsv.label='LIVYNTH IDENTITY-026 tongue mute'
+                hsv.inputs['Hue'].default_value=0.5
+                hsv.inputs['Saturation'].default_value=float(saturation)
+                hsv.inputs['Value'].default_value=float(value)
+                hsv.inputs['Fac'].default_value=1.0
+                hsv.location=(source_socket.node.location.x+220.0,
+                              source_socket.node.location.y)
+                tree.links.new(source_socket,hsv.inputs['Color'])
+                tree.links.new(hsv.outputs['Color'],
+                               principled.inputs['Base Color'])
+                applied.append({'material':iso.name,'slot':slot_index,
+                                'mode':'HSV_NODE_INSERTED',
+                                'saturation':float(saturation),
+                                'value':float(value)})
+        iso_nodes=int(len(iso.node_tree.nodes))
+        after_original_nodes=(int(len(original.node_tree.nodes))
+                              if original.use_nodes else None)
+        images_after=_hash_tree_images_pixels(iso.node_tree)
+        image_files_after=_hash_tree_images_files(iso.node_tree)
+        images_pixels_unchanged=bool(
+            [e['sha256'] for e in images_before]
+            ==[e['sha256'] for e in images_after])
+        image_files_unchanged=(
+            bool([e['sha256'] for e in image_files_before]
+                 ==[e['sha256'] for e in image_files_after])
+            if image_files_before else None)
+        isolation.append({
+            'slot':slot_index,
+            'original_material':original.name,
+            'isolated_copy':iso.name,
+            'original_users_before':original_users,
+            'original_users_after':int(original.users),
+            'original_nodes_before':original_nodes,
+            'original_nodes_after':after_original_nodes,
+            'isolated_nodes_after':iso_nodes,
+            'original_material_unchanged':bool(original_nodes==after_original_nodes),
+            'images_pixels_before':images_before,
+            'images_pixels_after':images_after,
+            'images_pixel_unchanged':images_pixels_unchanged,
+            'image_files_before':image_files_before,
+            'image_files_after':image_files_after,
+            'image_files_unchanged':image_files_unchanged,
+        })
     if not applied:
         raise RuntimeError('E_MOUTH_ANATOMY_TONGUE_MATERIAL_UNREACHED')
-    return applied
+    for entry in applied:
+        entry['source_material']=next(
+            (e['original_material'] for e in isolation
+             if e['slot']==entry['slot']), None)
+    return applied, isolation
 
 
 def _mute_teeth_gum_texture(teeth):
     """Mute the gum slabs of the copied teeth asset's diffuse texture.
 
-    The installed MPFB teeth.png is never written: the copied material's
-    TexImage node gets an in-memory image COPY whose gum texels are
-    blended toward a dark, desaturated brick tone. Tooth texels are left
-    bit-identical. Hard error when the expected texture is missing.
+    Operates on a SINGLE-USER COPY of every copied teeth material slot,
+    and the TexImage node is re-pointed at an in-memory image COPY whose
+    gum texels are blended toward a dark, desaturated brick tone. Tooth
+    texels are left bit-identical. The installed MPFB teeth.png is never
+    read for writing and never modified: the original image datablock is
+    pixel-hashed before and after the pass, and any on-disk image file
+    backing the node is sha256-hashed before and after. Hard error when
+    the expected texture is missing.
     """
     import bpy
     import numpy as np
     from tools.mouth_anatomy import (
-        mute_gum_pixels,TEETH_GUM_MUTE_STRENGTH,TEETH_GUM_TONE)
+        mute_gum_pixels,TEETH_GUM_MUTE_STRENGTH,TEETH_GUM_TONE,
+        sha256_of_float_array)
     applied=[]
+    isolation=[]
     if not teeth.data.materials:
         raise RuntimeError('E_MOUTH_ANATOMY_TEETH_MATERIAL_MISSING')
     for slot_index,material in enumerate(teeth.data.materials):
         if material is None or not material.use_nodes:
             continue
-        for node in material.node_tree.nodes:
+        original=material
+        original_nodes=int(len(original.node_tree.nodes))
+        original_users=int(original.users)
+        iso=original.copy()  # single-user copy: the original stays pristine
+        teeth.data.materials[slot_index]=iso
+        tree=iso.node_tree
+        for node in tree.nodes:
             if node.bl_idname!='ShaderNodeTexImage' or node.image is None:
                 continue
             image=node.image
@@ -262,11 +365,18 @@ def _mute_teeth_gum_texture(teeth):
             if width==0 or height==0 or width>4096 or height>4096:
                 raise RuntimeError('E_MOUTH_ANATOMY_TEETH_IMAGE_SIZE_'+
                                    str(width)+'x'+str(height))
+            count=width*height
+            original_pixels=np.empty(count*4,dtype=np.float32)
+            image.pixels.foreach_get(original_pixels)
+            original_image_sha256_before=sha256_of_float_array(original_pixels)
+            disk_file=image.filepath if (image.filepath or '') else ''
+            disk_sha_before=None
+            if disk_file and Path(disk_file).is_file():
+                disk_sha_before=_sha256_file(Path(disk_file))
             muted=image.copy()
             muted.name='livynth_oral_gum_muted'
             muted.pack()  # keep fully independent of the installed file
             node.image=muted
-            count=width*height
             pixels=np.empty(count*4,dtype=np.float32)
             muted.pixels.foreach_get(pixels)
             rgba=pixels.reshape(count,4)[:, :3].astype(np.float64)
@@ -283,15 +393,48 @@ def _mute_teeth_gum_texture(teeth):
             out[:, 3]=pixels.reshape(count,4)[:, 3]
             muted.pixels.foreach_set(out.reshape(count*4))
             muted.update()
-            applied.append({'material':material.name,'slot':slot_index,
+            after_pixels=np.empty(count*4,dtype=np.float32)
+            image.pixels.foreach_get(after_pixels)
+            original_image_sha256_after=sha256_of_float_array(after_pixels)
+            disk_sha_after=None
+            if disk_sha_before is not None:
+                disk_sha_after=_sha256_file(Path(disk_file))
+            image_unchanged=bool(original_image_sha256_before==
+                                 original_image_sha256_after)
+            disk_unchanged=(None if disk_sha_before is None
+                            else bool(disk_sha_before==disk_sha_after))
+            applied.append({'material':iso.name,'slot':slot_index,
                             'image':muted.name,
                             'gum_texel_fraction':round(fraction,4),
                             'strength':TEETH_GUM_MUTE_STRENGTH,
                             'tone':list(TEETH_GUM_TONE),
-                            'installed_file_untouched':True})
+                            'installed_file_untouched':bool(
+                                disk_unchanged is not False),
+                            'source_material':original.name})
+            isolation.append({
+                'slot':slot_index,
+                'original_material':original.name,
+                'isolated_copy':iso.name,
+                'original_users_before':original_users,
+                'original_users_after':int(original.users),
+                'original_nodes_before':original_nodes,
+                'original_nodes_after':int(len(original.node_tree.nodes)),
+                'isolated_nodes_after':int(len(tree.nodes)),
+                'original_material_unchanged':bool(
+                    original_nodes==int(len(original.node_tree.nodes))),
+                'original_image':image.name,
+                'original_image_sha256_before':original_image_sha256_before,
+                'original_image_sha256_after':original_image_sha256_after,
+                'original_image_unchanged':image_unchanged,
+                'installed_image_file':(disk_file if disk_file else None),
+                'installed_image_file_sha256_before':disk_sha_before,
+                'installed_image_file_sha256_after':disk_sha_after,
+                'installed_image_file_unchanged':disk_unchanged,
+                'isolated_copy_image':muted.name,
+            })
     if not applied:
         raise RuntimeError('E_MOUTH_ANATOMY_TEETH_TEXIMAGE_NOT_FOUND')
-    return applied
+    return applied, isolation
 
 
 def _soften_body_sulcus(body,max_push):
@@ -446,7 +589,8 @@ def _oral_collision_audit(body,teeth,tongue,dental_mask,pose_label):
 
 
 def _apply_mouth_anatomy(body,teeth,tongue,dental_mask,*,upper_seat,tongue_seat,
-                         tooth_scale=None,lip_push=None,oral_assets=None):
+                         tooth_scale=None,lip_push=None,oral_assets=None,
+                         tongue_scale=None,tongue_shift_y=None):
     """Seat upper arch and tongue; shrink the oversized dental arch; lift
     the mentolabial sulcus; mute the tongue's pink; darken the exposed
     mouth-cavity faces.
@@ -462,8 +606,10 @@ def _apply_mouth_anatomy(body,teeth,tongue,dental_mask,*,upper_seat,tongue_seat,
     import numpy as np
     from tools.mouth_anatomy import (
         SCHEMA,UPPER_SEAT_M,TONGUE_SEAT_M,TOOTH_SCALE,
+        TONGUE_SCALE,TONGUE_SHIFT_Y_M,
         TONGUE_SATURATION,TONGUE_VALUE,LIP_MAX_PUSH_M,
         validate_seat,validate_tooth_scale,validate_lip_push,
+        validate_tongue_scale,validate_tongue_shift_y,
         plan_masked_translation,plan_translation,
         cavity_z_window,plan_cavity_faces,plan_cavity_faces_bvh,
         validate_polygon_correspondence,
@@ -475,6 +621,11 @@ def _apply_mouth_anatomy(body,teeth,tongue,dental_mask,*,upper_seat,tongue_seat,
     tongue_seat=validate_seat(tongue_seat,'TONGUE_SEAT')
     tooth_scale=validate_tooth_scale(
         TOOTH_SCALE if tooth_scale is None else tooth_scale,'TOOTH_SCALE')
+    tongue_scale=validate_tongue_scale(
+        TONGUE_SCALE if tongue_scale is None else tongue_scale,'TONGUE_SCALE')
+    tongue_shift_y=validate_tongue_shift_y(
+        TONGUE_SHIFT_Y_M if tongue_shift_y is None else tongue_shift_y,
+        'TONGUE_SHIFT_Y')
     lip_push=validate_lip_push(
         LIP_MAX_PUSH_M if lip_push is None else lip_push,'LIP_PUSH')
     # 1) Oversized dental appearance: uniform down-scale on the copy.
@@ -486,18 +637,21 @@ def _apply_mouth_anatomy(body,teeth,tongue,dental_mask,*,upper_seat,tongue_seat,
         lambda before: plan_masked_translation(
             before,dental_mask,dz=-upper_seat,select_value=0,
             label='UPPER_TEETH'))
+    # 2a) Tongue: seat + posterior shift in one translation, then scale.
     tongue_audit=_translate_asset_in_body_space(
         body,tongue,
         lambda before: plan_translation(
-            before,dz=-tongue_seat,label='TONGUE'))
+            before,dy=tongue_shift_y,dz=-tongue_seat,label='TONGUE'))
+    tongue_scale_audit=_scale_asset_in_body_space(
+        body,tongue,tongue_scale,label='TONGUE')
     # 3) Sharp lower-lip contour: forward lift of the mentolabial sulcus.
     sulcus_audit=_soften_body_sulcus(body,lip_push)
     # 4) Unnatural pink surface: desaturate/darken the copied tongue.
-    tongue_material=_mute_tongue_material(
+    tongue_material,tongue_isolation=_mute_tongue_material(
         tongue,TONGUE_SATURATION,TONGUE_VALUE)
     # 4b) The upper "gum dinner-plate": mute the gum texels of the copied
     # teeth diffuse (in-memory image copy only, tooth texels untouched).
-    teeth_gum_texture=_mute_teeth_gum_texture(teeth)
+    teeth_gum_texture,teeth_isolation=_mute_teeth_gum_texture(teeth)
     world=body.matrix_world
     world_min=np.array([min((world @ p.co)[i] for p in body.data.vertices) for i in range(3)],dtype=np.float64)
     world_max=np.array([max((world @ p.co)[i] for p in body.data.vertices) for i in range(3)],dtype=np.float64)
@@ -626,13 +780,54 @@ def _apply_mouth_anatomy(body,teeth,tongue,dental_mask,*,upper_seat,tongue_seat,
         'status':'MOUTH_ANATOMY_FIXED_PENDING_VISUAL_REVIEW',
         'upper_seat_m':round(upper_seat,9),
         'tongue_seat_m':round(tongue_seat,9),
+        'tongue_shift_y_m':round(tongue_shift_y,9),
         'tooth_scale':tooth_audit,
         'tooth_scale_value':round(float(tooth_scale),9),
+        'tongue_scale':tongue_scale_audit,
+        'tongue_scale_value':round(float(tongue_scale),9),
         'upper':upper_audit,
         'tongue':tongue_audit,
         'lip_soften':sulcus_audit,
         'tongue_material':tongue_material,
         'teeth_gum_texture':teeth_gum_texture,
+        'material_isolation':{
+            'method':'SINGLE_USER_MATERIAL_COPIES_AND_IN_MEMORY_IMAGE_COPIES',
+            'tongue_slots':tongue_isolation,
+            'teeth_slots':teeth_isolation,
+            'body_materials_created_fresh':[exterior.name,cavity_mat.name],
+            'copies_created':len(tongue_isolation)+len(teeth_isolation),
+            'original_materials_unchanged':bool(all(
+                e['original_material_unchanged']
+                for e in tongue_isolation+teeth_isolation)),
+            'original_images_unchanged':bool(
+                all(e['original_image_unchanged'] for e in teeth_isolation)
+                and all(e['images_pixel_unchanged'] for e in tongue_isolation)),
+            'installed_image_files_checked':sum(
+                1 for e in teeth_isolation
+                if e['installed_image_file_unchanged'] is not None)
+                + sum(1 for e in tongue_isolation
+                      if e['image_files_unchanged'] is not None),
+            'installed_image_files_unchanged':(
+                bool(all(e['installed_image_file_unchanged']
+                         for e in teeth_isolation
+                         if e['installed_image_file_unchanged'] is not None)
+                     and all(e['image_files_unchanged']
+                             for e in tongue_isolation
+                             if e['image_files_unchanged'] is not None))
+                if any(e['installed_image_file_unchanged'] is not None
+                       for e in teeth_isolation)
+                or any(e['image_files_unchanged'] is not None
+                       for e in tongue_isolation) else None),
+        },
+        'material_isolation_verified':bool(
+            all(e['original_material_unchanged']
+                for e in tongue_isolation+teeth_isolation)
+            and all(e['original_image_unchanged'] for e in teeth_isolation)
+            and all(e['images_pixel_unchanged'] for e in tongue_isolation)
+            and all(e['installed_image_file_unchanged'] is not False
+                    for e in teeth_isolation)
+            and all(e['image_files_unchanged'] is not False
+                    for e in tongue_isolation)),
         'cavity_faces':len(cavity),
         'cavity_candidates':candidate_count,
         'cavity_method':'BVH_FIRST_HIT_FRONT_OPENINGS_JAWOPEN_SAME_POSE_FILTER',
@@ -704,7 +899,7 @@ def _audit_jaw_and_visemes(body,assets,*,use_oral_correctives=False):
     return reports
 
 
-def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False,mhclo_dentition=False,rigged_seam_probe=False,seam_jaw_stills=False,oral_isolation=False,dental_arch_isolation=False,oral_anatomy=False,upper_seat=None,tongue_seat=None,tooth_scale=None,lip_push=None):
+def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False,mhclo_dentition=False,rigged_seam_probe=False,seam_jaw_stills=False,oral_isolation=False,dental_arch_isolation=False,oral_anatomy=False,upper_seat=None,tongue_seat=None,tooth_scale=None,lip_push=None,tongue_scale=None,tongue_shift_y=None):
     import bpy
     import numpy as np
     from bl_ext.user_default.mpfb.services import (
@@ -976,6 +1171,7 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
             body,actual_assets['teeth'],actual_assets['tongue'],dental_mask,
             upper_seat=upper_seat,tongue_seat=tongue_seat,
             tooth_scale=tooth_scale,lip_push=lip_push,
+            tongue_scale=tongue_scale,tongue_shift_y=tongue_shift_y,
             oral_assets=controlled)
         from character.seamed_jaw_motion import audit_seamed_jaw_motion as _audit_after_fix
         _set_morphs(body,{},oral_assets=controlled)
@@ -1109,6 +1305,14 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
             images.append(_render(scene,body,'front_'+label,0,output))
         _set_morphs(body,POSES['jaw_open'],oral_assets=controlled)
         images.append(_render(scene,body,'three_quarter_jaw_open',38,output))
+    installed_mhclo_reverified={}
+    for entry in resolved:
+        digest=_sha256_file(entry['_absolute_path_for_blender_only'])
+        installed_mhclo_reverified[entry['category']]={
+            'sha256':digest,
+            'expected_sha256':entry['sha256'],
+            'unchanged':bool(digest==entry['sha256']),
+        }
     report={
         'schema':SCHEMA,'character_id':character,
         'status':('CAPTURED_HEAD_A_MOUTH_ANATOMY_PENDING_VISUAL_REVIEW'
@@ -1150,10 +1354,12 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
                               if oral_motion_audit else 'NOT_RUN'),
         'assets':[
             {'category':cat,'source_sha256':entry['sha256'],
+             'size_bytes':entry.get('size_bytes'),
              'mesh_vertices':len(actual_assets[cat].data.vertices),
              'rigged_to_copied_armature':True}
             for cat,entry in [(x['category'],x) for x in resolved]
         ],
+        'installed_mhclo_reverified':installed_mhclo_reverified,
         'images':images,
         'existing_glbs_modified':False,
         'eyes_teeth_tongue_follow_expression':'PENDING_VISUAL_REVIEW',
@@ -1204,6 +1410,10 @@ if __name__=='__main__':
                         help='IDENTITY-026 teeth uniform scale (default pinned in tools/mouth_anatomy.py)')
     parser.add_argument('--lip-push',type=float,default=None,
                         help='IDENTITY-026 mentolabial sulcus forward lift in m (default pinned)')
+    parser.add_argument('--tongue-scale',type=float,default=None,
+                        help='IDENTITY-027 tongue uniform scale (default pinned in tools/mouth_anatomy.py)')
+    parser.add_argument('--tongue-shift-y',type=float,default=None,
+                        help='IDENTITY-027 tongue posterior shift in m (bounded; default pinned)')
     parser.add_argument('--mhclo-dentition',action='store_true',
                         help='Use original MPFB teeth helper mapping instead of visual Z split')
     parser.add_argument('--oral-correctives',action='store_true',
@@ -1222,4 +1432,5 @@ if __name__=='__main__':
         dental_arch_isolation=args.dental_arch_isolation,
         oral_anatomy=args.oral_anatomy,
         upper_seat=args.upper_seat,tongue_seat=args.tongue_seat,
-        tooth_scale=args.tooth_scale,lip_push=args.lip_push)
+        tooth_scale=args.tooth_scale,lip_push=args.lip_push,
+        tongue_scale=args.tongue_scale,tongue_shift_y=args.tongue_shift_y)

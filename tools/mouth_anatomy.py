@@ -13,24 +13,43 @@ Fix components (all material/geometry-only on the copy):
    upper lip instead of being embedded above the mouth opening.
 2. Tongue seat: translate the whole tongue DOWN by a bounded amount so it
    rests on the lower dental arch instead of doming into the upper mouth.
+   Optionally scaled about its centroid (TONGUE_SCALE) and shifted
+   posteriorly (+Y, TONGUE_SHIFT_Y_M) to clear the lower arch without
+   changing the tooth layout.
 3. Oral cavity material: assign a dark non-reflective material to the
    inner-facing body faces in the mouth band (backfaces facing the camera
    through the opened lips), replacing the exposed grey speckled interior.
    The outer body faces get a plain warm-clay material.
+4. Millimetre-scale collision predicates use RELATIVE tolerances
+   (angle/area ratios), never absolute ones - the MPFB oral facets are
+   ~2-6 mm across, where an absolute 1e-9 test on the barycentric area
+   determinant silently rejected genuine transversal crossings.
+
+Material mutations always happen on a single-user COPY of the copied
+scene's material datablock, never on the material itself: the original
+datablock (which may be shared with the source human) is never edited,
+image pixels of the source teeth/tongue textures are never written, and
+the installed MPFB files are hashed before and after the fix.
 """
 from __future__ import annotations
 
+import hashlib
 import math
 import numpy as np
 
 SCHEMA = 'livynth.oral-anatomy.v1'
 UPPER_SEAT_M = 0.022
-TONGUE_SEAT_M = 0.024
+TONGUE_SEAT_M = 0.036
 MAX_SEAT_M = 0.045
 MIN_SEAT_M = 0.0
 TOOTH_SCALE = 0.85
 MIN_TOOTH_SCALE = 0.60
 MAX_TOOTH_SCALE = 1.30
+TONGUE_SCALE = 0.80
+MIN_TONGUE_SCALE = 0.60
+MAX_TONGUE_SCALE = 1.30
+TONGUE_SHIFT_Y_M = 0.010
+MAX_TONGUE_SHIFT_Y_M = 0.010
 TONGUE_SATURATION = 0.55
 TONGUE_VALUE = 0.72
 TEETH_GUM_TONE = (0.30, 0.16, 0.14)
@@ -66,6 +85,37 @@ def validate_seat(value, label):
     if not (MIN_SEAT_M <= seat <= MAX_SEAT_M):
         raise MouthAnatomyError('E_SEAT_RANGE_' + label)
     return seat
+
+
+def validate_tongue_scale(value, label='TONGUE_SCALE'):
+    return validate_tooth_scale(value, label)
+
+
+def validate_tongue_shift_y(value, label='TONGUE_SHIFT_Y'):
+    try:
+        shift = float(value)
+    except (TypeError, ValueError) as exc:
+        raise MouthAnatomyError('E_TONGUE_SHIFT_TYPE_' + label) from exc
+    if isinstance(value, bool) or not math.isfinite(shift):
+        raise MouthAnatomyError('E_TONGUE_SHIFT_VALUE_' + label)
+    if not (0.0 <= shift <= MAX_TONGUE_SHIFT_Y_M):
+        raise MouthAnatomyError('E_TONGUE_SHIFT_RANGE_' + label)
+    return shift
+
+
+def sha256_of_float_array(array):
+    """Content hash of a float array (dtype, shape and bytes).
+
+    Used by the material-isolation proof: hashing the original image
+    datablock before/after the gum-mute pass must produce identical
+    digests, proving the installed/shared texture was never written.
+    """
+    a = np.ascontiguousarray(np.asarray(array, dtype=np.float32))
+    digest = hashlib.sha256()
+    digest.update(str(a.dtype).encode('ascii') + b'|')
+    digest.update(','.join(str(d) for d in a.shape).encode('ascii') + b'|')
+    digest.update(a.tobytes())
+    return digest.hexdigest()
 
 
 def validate_tooth_scale(value, label='TOOTH_SCALE'):
@@ -273,18 +323,36 @@ def mute_gum_pixels(rgb, *, tone=TEETH_GUM_TONE,
     return out, mask
 
 
-def _edge_pierces_triangle(p0, p1, t0, t1, t2, *, epsilon=1e-9):
+def _edge_pierces_triangle(p0, p1, t0, t1, t2, *,
+                           epsilon_angle=1e-12, epsilon_area=1e-12,
+                           edge_slack=1e-9):
     """Möller segment-triangle piercing test (exact predicate, no barycentric
     allocation). Returns True iff the open segment (p0, p1) crosses the
     closed triangle (t0, t1, t2) transversally.
+
+    Tolerances are RELATIVE to the face areas and edge lengths so the
+    predicate stays exact at millimetre scale (MPFB oral facets are
+    ~2-6 mm across; an absolute 1e-9 test on the barycentric area
+    determinant - which scales with the SQUARE of the edge length - would
+    reject genuine crossings on any triangle smaller than ~5.6 mm). With
+    double precision, 1e-12 relative rejects only exact degeneracies and
+    the parallel/coplanar boundary cases.
     """
     n = np.cross(t1 - t0, t2 - t0)
     d = p1 - p0
+    n_norm = float(np.linalg.norm(n))
+    d_norm = float(np.linalg.norm(d))
+    if n_norm == 0.0 or d_norm == 0.0:
+        return False  # degenerate face or edge: never a crossing
     denom = float(n @ d)
-    if abs(denom) < epsilon:
+    # Reject only genuinely parallel/coplanar configurations (angle ~ 0).
+    if abs(denom) <= epsilon_angle * n_norm * d_norm:
         return False
     t = float(n @ (t0 - p0)) / denom
-    if t <= 0.0 or t >= 1.0:  # endpoints on the surface do not count
+    if t <= 1e-12 or t >= 1.0 - 1e-12:
+        # endpoints on the surface (open segment) do not count; the
+        # 1e-12 relative margin absorbs floating-point noise at the
+        # surface boundary instead of guessing a crossing from rounding
         return False
     q = p0 + t * d
     e0 = t1 - t0
@@ -296,25 +364,29 @@ def _edge_pierces_triangle(p0, p1, t0, t1, t2, *, epsilon=1e-9):
     d02 = float(e0 @ vp)
     d12 = float(e2 @ vp)
     den = d00 * d11 - d01 * d01
-    if abs(den) < epsilon:
+    if abs(den) <= epsilon_area * d00 * d11:
+        # degenerate (collinear) face - no interior to pierce
         return False
     u = (d11 * d02 - d01 * d12) / den
     v = (d00 * d12 - d01 * d02) / den
-    return u >= -1e-9 and v >= -1e-9 and u + v <= 1.0 + 1e-9
+    return u >= -edge_slack and v >= -edge_slack and u + v <= 1.0 + edge_slack
 
 
-def _triangles_intersect(a0, a1, a2, b0, b1, b2, *, epsilon=1e-9):
+def _triangles_intersect(a0, a1, a2, b0, b1, b2, **kwargs):
     """Exact Möller triangle-triangle intersection predicate.
 
     Counts only transversal crossings: six edge-pierce tests. Tangential
     touches (coplanar contact, shared ridges) are reported as not
     intersecting - callers get a conservative interpenetration signal.
+    Coplanar area overlap (surfaces sliding in the same plane) is out of
+    scope by design; for two thin volumetric slabs, genuine volumetric
+    interference always produces at least one transversal face pair.
     """
     for p0, p1 in ((a0, a1), (a1, a2), (a2, a0)):
-        if _edge_pierces_triangle(p0, p1, b0, b1, b2, epsilon=epsilon):
+        if _edge_pierces_triangle(p0, p1, b0, b1, b2, **kwargs):
             return True
     for p0, p1 in ((b0, b1), (b1, b2), (b2, b0)):
-        if _edge_pierces_triangle(p0, p1, a0, a1, a2, epsilon=epsilon):
+        if _edge_pierces_triangle(p0, p1, a0, a1, a2, **kwargs):
             return True
     return False
 
@@ -367,17 +439,31 @@ def _plane_extent(points, triangle0, triangle1, triangle2):
     return float(d.max() - d.min())
 
 
+def _iter_transversal_crossings(A, B, *, aabb_margin):
+    """Yield (index_a, index_b_original, triangle_a, triangle_b) pairs that
+    cross transversally. Shared by count_ and describe_ so they cannot
+    drift apart. Tangential/coplanar touches are not yielded."""
+    for i, j, j_orig, tri_b in _iter_candidate_pairs(A, B,
+                                                     aabb_margin=aabb_margin):
+        tri_a = A[i]
+        if _triangles_intersect(tri_a[0], tri_a[1], tri_a[2],
+                                tri_b[0], tri_b[1], tri_b[2]):
+            yield i, j_orig, tri_a, tri_b
+
+
 def describe_intersecting_triangle_pairs(tris_a, tris_b, *,
                                          aabb_margin=1e-6,
                                          max_reported_pairs=64):
     """Locations and depth proxies for every transversal crossing.
 
-    Returns {'method', 'total_a', 'total_b', 'pairs', 'sample_pairs',
-             'aabb_margin_m', 'pair_details'} where pair_details carries,
-    per crossing pair: triangle indices (as emitted), world-space centroid
-    of the six involved vertices, the extent of each triangle across the
-    other's plane, and ``crossing_depth_estimate_m`` = the smaller of the
-    two extents (a conservative overlap measure).
+    Returns {'method', 'total_a', 'total_b', 'pairs', 'summary',
+             'pair_details', 'pair_details_truncated', 'aabb_margin_m'}.
+    pair_details carries, per crossing pair: triangle indices (as emitted),
+    world-space centroid of the six involved vertices, the extent of each
+    triangle across the other's plane, and ``crossing_depth_estimate_m``
+    = the smaller of the two extents (a conservative overlap measure;
+    this is an onto-other-plane extent proxy, NOT a minimal-translation
+    penetration depth).
     """
     A = np.asarray(tris_a, dtype=np.float64)
     B = np.asarray(tris_b, dtype=np.float64)
@@ -394,12 +480,8 @@ def describe_intersecting_triangle_pairs(tris_a, tris_b, *,
     pairs = 0
     details = []
     depths = []
-    for i, j, j_orig, tri_b in _iter_candidate_pairs(A, B,
-                                                     aabb_margin=aabb_margin):
-        tri_a = A[i]
-        if not _triangles_intersect(tri_a[0], tri_a[1], tri_a[2],
-                                    tri_b[0], tri_b[1], tri_b[2]):
-            continue
+    for i, j_orig, tri_a, tri_b in _iter_transversal_crossings(
+            A, B, aabb_margin=aabb_margin):
         pairs += 1
         extent_a = _plane_extent(tri_a, tri_b[0], tri_b[1], tri_b[2])
         extent_b = _plane_extent(tri_b, tri_a[0], tri_a[1], tri_a[2])
@@ -452,14 +534,11 @@ def count_intersecting_triangle_pairs(tris_a, tris_b, *,
         raise MouthAnatomyError('E_INTERSECT_MARGIN')
     pairs = 0
     samples = []
-    for i, j, j_orig, tri_b in _iter_candidate_pairs(A, B,
-                                                     aabb_margin=aabb_margin):
-        tri_a = A[i]
-        if _triangles_intersect(tri_a[0], tri_a[1], tri_a[2],
-                                tri_b[0], tri_b[1], tri_b[2]):
-            pairs += 1
-            if len(samples) < max_report_pairs:
-                samples.append((int(i), int(j_orig)))
+    for i, j_orig, tri_a, tri_b in _iter_transversal_crossings(
+            A, B, aabb_margin=aabb_margin):
+        pairs += 1
+        if len(samples) < max_report_pairs:
+            samples.append((int(i), int(j_orig)))
     return {
         'method': 'MOLLER_TRIANGLE_PIERCE',
         'total_a': int(len(A)),
