@@ -63,3 +63,22 @@ def verify_asset_file(path, expected_digest):
     if digest != expected_digest:
         raise AnatomyPlanError('E_ASSET_HASH_MISMATCH')
     return {'sha256':digest,'size_bytes':path.stat().st_size}
+
+
+def resolve_native_assets(plan, find_asset):
+    """Resolve pinned relative choices through MPFB, validating source bytes."""
+    clean=validate_plan(plan)
+    result=[]
+    for category in REQUIRED:
+        item=clean['assets'][category]
+        located=find_asset(item['relative_path'], asset_subdir=category)
+        if not located:
+            raise AnatomyPlanError('E_MISSING_INSTALLED_ASSET_'+category)
+        verified=verify_asset_file(located,item['sha256'])
+        result.append({
+            'category':category,'relative_path':item['relative_path'],
+            'sha256':verified['sha256'],'size_bytes':verified['size_bytes'],
+            'material_type':MATERIAL[category],
+            '_absolute_path_for_blender_only':str(Path(located).resolve()),
+        })
+    return result
