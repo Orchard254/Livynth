@@ -119,6 +119,14 @@ The original combined comparator exited E_HEAD_SHAPE_AUDIT_a because the exporte
 
 **Result:** forensically reconstructed logs satisfy the full structural comparator after accounting for deterministic precision, but the user's original run genuinely returned FAILURE and neither raw GLB was independently opened here. **Animation behavior (blink/jaw/visemes), image likeness, five-view approval and photorealism still UNVERIFIED/FAIL where applicable.** The Blender warning of >4 skin influences truncated on glTF export remains an independent motion-quality risk.
 
+## IDENTITY-006 — existing GLB facial morph-signal inspector (2026-11-12)
+
+After the owner Windows A/B exporter produced two rigged GLBs, the next decisive question is whether both actually contain **nonzero exported facial shape deltas** with identical bone/shape interfaces. New tools/glb_morph_qa.py inspects the existing demo_head_a.glb and demo_head_b.glb without running Blender, and checks the seven important blink/jaw/mouth/viseme control deltas, 163-joint skin attachment, 67 uniquely named targets, valid attribute formats, compatible target and bone names, and different actual exported base positions.
+
+Also fixed the old tools/measure_glb_topology.py morph-motion measurement: in glTF, morph target POSITION is a **delta**, not an absolute position. The previous calculation could report motion for a zero delta. Sparse accessor support and synthetic zero/active/sparse controls were added.
+
+**Evidence:** source and seven synthetic tests implemented in development branch, but not yet executed against the owner's existing GLB bytes. Do not report facial animation PASS until morph_signal_qa.json is produced, and do not interpret it as visual animation QA. Command: python tools/glb_morph_qa.py --folder output/identity_ab/20261112_045945_179772. See docs/IDENTITY_MORPH_SIGNAL_006.md. Character 001 likeness Phase-3 remains FAIL.
+
 ## Explicit next acceptance gates
 
 1. **Owner Windows integrated smoke**: open the Studio, inspect actual neutral PNG, render a 30-frame MP4 and confirm it visually plays with audible speech; save `studio_run.json` and Blender diagnostics. Fail any stage that is black, visually incorrect, silent, or crashes. Repeat with `--mode demo` before release.
