@@ -77,7 +77,9 @@ def validate_character(report,folder,character,*,expect_alignment=False,expect_o
                 or audit.get('max_storage_error_m',1)>0.000002):
                 raise AnatomyABError('E_IDENTITY_FIELD_ALIGNMENT_'+category)
     if expect_oral_motion:
-        from character.anatomy_motion_audit import SCHEMA as ORAL_SCHEMA,POSES as ORAL_POSES
+        from character.anatomy_motion_audit import (
+            SCHEMA as ORAL_SCHEMA, POSES as ORAL_POSES,
+            classify_motion_stats, OralMotionError)
         audit=report.get('oral_motion_audit')
         allowed={'FAIL_BODY_FACIAL_MORPH_INERT','FAIL_ORAL_ASSETS_STATIC_WHILE_BODY_MORPHS',
                  'FAIL_PARTIAL_ORAL_MOTION_SIGNAL',
@@ -94,6 +96,12 @@ def validate_character(report,folder,character,*,expect_alignment=False,expect_o
                 any(not isinstance(s,dict) or s.get('vertex_count',0)<4
                     for s in stats.values())):
                 raise AnatomyABError('E_ORAL_MOTION_MEASUREMENT_'+pose)
+            try:
+                recomputed=classify_motion_stats(stats)
+            except OralMotionError as exc:
+                raise AnatomyABError('E_ORAL_MOTION_METRICS_'+pose+': '+str(exc)) from exc
+            if recomputed!=measurement['status']:
+                raise AnatomyABError('E_ORAL_MOTION_STATUS_CONTRADICTION_'+pose)
     assets=report.get('assets')
     if (not isinstance(assets,list) or
         [a.get('category') for a in assets]!=list(REQUIRED) or
