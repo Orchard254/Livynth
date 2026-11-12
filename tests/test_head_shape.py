@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 import numpy as np
 from character.head_shape import (validate_controls,InvalidHeadShape,displacement_field,
-                                  apply_head_shape,check_deformation)
+                                  apply_head_shape,check_deformation,audit_realized_head_shape)
 from character.identity_recipe import (load_recipe,validate_recipe,InvalidIdentityRecipe,recipe_sha256,SCHEMA,SCHEMA_V2)
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -71,6 +71,39 @@ class HeadControlTests(unittest.TestCase):
         dest=p.copy(); dest[[0,1]]=dest[[1,0]]
         with self.assertRaises(InvalidHeadShape):
             check_deformation(p,dest,quads)
+    def test_realized_roundtrip_accepts_float32_storage(self):
+        source = np.array([[0,0,0],[1,0,0],[1,1,0],[0,1,0],
+                           [0,0,1],[1,0,1],[1,1,1],[0,1,1]],dtype=float)
+        quads = np.array([[0,1,2,3],[4,5,6,7],[0,1,5,4],[1,2,6,5]])
+        planned = source.copy()
+        planned[:,0] += 0.0001234567
+        stored = planned.astype(np.float32).astype(np.float64)
+        audit = audit_realized_head_shape(source, planned, stored, quads)
+        self.assertEqual(audit['status'],'PASS_LOCAL_QUADS_NOT_GLOBAL_INTERSECTIONS')
+        self.assertEqual(audit['vertex_coordinate_encoding'],'Blender_mesh_float32_xyz')
+        self.assertEqual(audit['max_storage_error_m'],0.0)
+
+    def test_realized_roundtrip_detects_corrupted_storage(self):
+        source = np.array([[0,0,0],[1,0,0],[1,1,0],[0,1,0],
+                           [0,0,1],[1,0,1],[1,1,1],[0,1,1]],dtype=float)
+        quads = np.array([[0,1,2,3],[4,5,6,7],[0,1,5,4],[1,2,6,5]])
+        planned = source.copy()
+        planned[:,0] += 0.0001234567
+        stored = planned.astype(np.float32).astype(np.float64)
+        stored[1,0] += 0.002
+        with self.assertRaisesRegex(InvalidHeadShape,'E_HEAD_STORAGE_MISMATCH'):
+            audit_realized_head_shape(source, planned, stored, quads)
+
+    def test_realized_roundtrip_still_rejects_flipped_faces(self):
+        source = np.array([[0,0,0],[1,0,0],[1,1,0],[0,1,0],
+                           [0,0,1],[1,0,1],[1,1,1],[0,1,1]],dtype=float)
+        quads = np.array([[0,1,2,3],[4,5,6,7],[0,1,5,4],[1,2,6,5]])
+        planned = source.copy()
+        planned[[0,1]] = planned[[1,0]]
+        stored = planned.astype(np.float32).astype(np.float64)
+        with self.assertRaisesRegex(InvalidHeadShape,'E_QUAD_FLIP'):
+            audit_realized_head_shape(source, planned, stored, quads)
+
     def test_rejects_malformed_quad_indices(self):
         p=np.array([[0,0,0],[1,0,0],[1,1,0],[0,1,0]],dtype=float)
         with self.assertRaisesRegex(InvalidHeadShape,'E_HEAD_QUAD_INDICES'):
