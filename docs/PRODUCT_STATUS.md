@@ -448,6 +448,56 @@ Reference `docs/IDENTITY_ORAL_CORRECTIVES_014.md`.
 Next owner command: 
 `python tools/run_anatomy_ab_review.py --align-accessories --audit-oral-motion --oral-correctives`.
 Keep Character 001 five-angle photo-likeness Phase-3 FAIL.
+## IDENTITY-014 owner Windows oral-corrective motion PASS, mouth appearance FAIL (2026-11-12)
+
+Owner submitted real A/B Blender evidence `20261112_083529_509207.zip`
+(SHA256 `24d83c24a34ea8b979088f0ca5cef4f5b0268e8a023ae8267c8d36de33def167`).
+All 16 manifest-file SHA256 hashes verified. Both heads still use the
+original 13,380-vertex native body, 13,378 quads, 163 joints and 67
+face target names; distinct detailed head geometries remain intact.
+
+The formerly motionless teeth and tongue NOW MOVE in both heads:
+
+- A jawOpen: 2,201 dental + 226 tongue vertices, max 17.762mm.
+- A AA vowel: 2,187 dental + 226 tongue vertices, max 8.827mm.
+- B jawOpen: 2,235 dental + 226 tongue vertices, max 17.818mm.
+- B AA vowel: 2,214 dental + 226 tongue vertices, max 9.284mm.
+
+**Result:** the original IDENTITY-013 oral-motion disconnect is
+resolved in the experimental Blender scene. **Visual FAIL:** the mouth
+shows dense, unnatural upper/lower dental surfaces and exposed pink
+oral tissue. The continuous tooth Z-height mask can split individual
+tooth/gum surfaces during motion; numerical movement alone does not
+approve oral realism. See docs/IDENTITY_DENTITION_015.md.
+
+## IDENTITY-015 — source-proven upper/lower tooth assignments
+
+The documented MakeHuman HM08 basemesh provides explicit lower-teeth
+helper vertices 14992..15059 and upper-teeth helpers 15060..15127.
+The native teeth_base MHCLO stores each tooth vertex's original
+basemesh reference indices/weights. New opt-in segmentation reads
+those original assignments, validates an exact source-to-copy
+vertex order, requires disjoint upper/lower tooth faces and assigns
+**rigid, binary** whole-jaw movement rather than interpolating each
+tooth vertex by its final 3D height.
+
+Code: character/mhclo_dentition.py, optional lower-teeth mask in
+character/oral_correctives.py, and `--mhclo-dentition` in
+tools/run_anatomy_ab_review.py. The new flag requires all existing
+alignment, oral-corrective and world-space motion checks. Both A/B
+reports must show identical source mapping SHA, stable rig/morph
+contracts, 12 image poses and matching dental movement counts.
+
+**10 pure local mapping/negative tests passed; four more repository
+tests authored.** New Blender installed-asset mapping and rendering
+NOT YET RUN, and visual outcome NOT VERIFIED. If actual MHCLO
+references differ or mesh topology bridges upper/lower jaws, the
+tool deliberately reports failure rather than guessing. Next:
+
+    python -m unittest discover -s tests -p "test_mhclo_dentition.py" -v
+    python tools/run_anatomy_ab_review.py --align-accessories --audit-oral-motion --oral-correctives --mhclo-dentition
+
+Character 001 photographic identity likeness remains Phase-3 FAIL.
 ## Explicit next acceptance gates
 
 1. **Owner Windows integrated smoke**: open the Studio, inspect actual neutral PNG, render a 30-frame MP4 and confirm it visually plays with audible speech; save `studio_run.json` and Blender diagnostics. Fail any stage that is black, visually incorrect, silent, or crashes. Repeat with `--mode demo` before release.

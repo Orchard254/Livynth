@@ -123,7 +123,7 @@ def _audit_jaw_and_visemes(body,assets,*,use_oral_correctives=False):
     return reports
 
 
-def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False):
+def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False,mhclo_dentition=False):
     import bpy
     import numpy as np
     from bl_ext.user_default.mpfb.services import (
@@ -133,6 +133,8 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
 
     if oral_correctives and not (align_accessories and audit_oral_motion):
         raise ValueError('E_ORAL_CORRECTIVES_REQUIRE_ALIGNMENT_AND_AUDIT')
+    if mhclo_dentition and not oral_correctives:
+        raise ValueError('E_MHCLO_DENTITION_NEEDS_ORAL_CORRECTIVES')
     output=Path(output).resolve()
     if output.exists() or output.is_symlink():
         raise FileExistsError('E_ANATOMY_POSE_OUTPUT_EXISTS')
@@ -156,6 +158,7 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
     rig=HumanService.add_builtin_rig(source,'default',import_weights=True)
     if rig is None or rig.type!='ARMATURE' or len(rig.data.bones)!=163:
         raise RuntimeError('E_MPFb_SOURCE_RIG')
+    source_assets={}
     for asset in resolved:
         obj=HumanService.add_mhclo_asset(
             asset['_absolute_path_for_blender_only'],source,
@@ -165,6 +168,7 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
             import_subrig=True,import_weights=True)
         if obj is None or obj.type!='MESH' or not len(obj.data.vertices):
             raise RuntimeError('E_SOURCE_ANATOMY_ATTACH_'+asset['category'])
+        source_assets[asset['category']]=obj
 
     collection=bpy.data.collections.new('livynth_anatomy_ab_export_copy')
     bpy.context.scene.collection.children.link(collection)
@@ -199,6 +203,38 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
             not any(m.type=='ARMATURE' and m.object==copy_rig
                     for m in obj.modifiers)):
             raise RuntimeError('E_COPIED_ASSET_RIG_MISMATCH_'+obj.name)
+
+    dental_mask=None
+    dental_mapping_audit=None
+    if mhclo_dentition:
+        from bl_ext.user_default.mpfb.entities.clothes.mhclo import Mhclo
+        from character.mhclo_dentition import classify_dentition_mhclo
+        if len(source.data.vertices)!=19158:
+            raise RuntimeError('E_MHCLO_UNEXPECTED_HM08_NATIVE_SOURCE')
+        tooth_original=source_assets['teeth']
+        tooth_copy=actual_assets['teeth']
+        if len(tooth_original.data.vertices)!=len(tooth_copy.data.vertices):
+            raise RuntimeError('E_MHCLO_COPIED_TEETH_VERTEX_COUNT')
+        # MPFB MHCLO mapping is ordered by original OBJ vertex index.
+        # Verify the cloned asset retained that ordering before using it.
+        src_world=np.asarray([tuple(tooth_original.matrix_world @ v.co)
+                              for v in tooth_original.data.vertices],dtype=np.float64)
+        copy_world=np.asarray([tuple(tooth_copy.matrix_world @ v.co)
+                               for v in tooth_copy.data.vertices],dtype=np.float64)
+        if float(np.linalg.norm(src_world-copy_world,axis=1).max())>0.0001:
+            raise RuntimeError('E_MHCLO_COPY_VERTEX_ORDER_NOT_VERIFIED')
+        tooth_path=next(x['_absolute_path_for_blender_only']
+                        for x in resolved if x['category']=='teeth')
+        metadata=Mhclo()
+        metadata.load(tooth_path)
+        dental_mask,dental_mapping_audit=classify_dentition_mhclo(
+            len(tooth_copy.data.vertices),metadata.verts,
+            [tuple(poly.vertices) for poly in tooth_copy.data.polygons],
+            source_vertex_count=len(source.data.vertices))
+        dental_mapping_audit['pinned_asset_sha256']=next(
+            x['sha256'] for x in resolved if x['category']=='teeth')
+        dental_mapping_audit['copied_vertex_order_error_m']=round(
+            float(np.linalg.norm(src_world-copy_world,axis=1).max()),9)
 
     # Same verified pre-face-keys sequence used by the working Head A/B GLBs.
     _stash_armature_modifier(body)
@@ -242,7 +278,8 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
     if oral_correctives:
         from character.oral_correctives import add_oral_shape_keys
         oral_corrective_audit=add_oral_shape_keys(
-            body,{category:actual_assets[category] for category in ('teeth','tongue')})
+            body,{category:actual_assets[category] for category in ('teeth','tongue')},
+            lower_teeth_mask=dental_mask,dental_mapping_report=dental_mapping_audit)
     controlled={category:actual_assets[category] for category in ('teeth','tongue')} if oral_correctives else None
 
     # Remove the original character so it cannot obscure the cloned one.
@@ -292,6 +329,9 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
         'oral_corrective_mode':('MORPH_LINKED_LOWER_TEETH_AND_TONGUE'
                                  if oral_correctives else 'OFF'),
         'oral_corrective_audit':oral_corrective_audit,
+        'dental_segmentation_mode':('MHCLO_HM08_UPPER_LOWER_HELPERS'
+                                    if mhclo_dentition else 'LEGACY_Z_SPLIT'),
+        'dental_mapping_audit':dental_mapping_audit,
         'oral_motion_audit':oral_motion_audit,
         'oral_motion_status':('RECORDED_DO_NOT_INFER_VISUAL_APPROVAL'
                               if oral_motion_audit else 'NOT_RUN'),
@@ -321,6 +361,8 @@ if __name__=='__main__':
     parser.add_argument('--character',choices=('demo_head_a','demo_head_b'),required=True)
     parser.add_argument('--plan',type=Path,required=True)
     parser.add_argument('--out',type=Path,required=True)
+    parser.add_argument('--mhclo-dentition',action='store_true',
+                        help='Use original MPFB teeth helper mapping instead of visual Z split')
     parser.add_argument('--oral-correctives',action='store_true',
                         help='Opt-in lower dental/tongue corrective morphs; requires --align-accessories --audit-oral-motion')
     parser.add_argument('--audit-oral-motion',action='store_true',
@@ -329,4 +371,5 @@ if __name__=='__main__':
                         help='Apply same detailed identity field to copied eyes/teeth/tongue')
     args=parser.parse_args(sys.argv[sys.argv.index('--')+1:])
     run(args.character,args.plan,args.out,align_accessories=args.align_accessories,
-        audit_oral_motion=args.audit_oral_motion,oral_correctives=args.oral_correctives)
+        audit_oral_motion=args.audit_oral_motion,oral_correctives=args.oral_correctives,
+        mhclo_dentition=args.mhclo_dentition)
