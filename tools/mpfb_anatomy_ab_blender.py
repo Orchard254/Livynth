@@ -57,7 +57,7 @@ def _render(scene,body,filename,angle_deg,output):
     return {'pose':filename,'filename':path.name,'bytes':path.stat().st_size}
 
 
-def _set_morphs(body,weights):
+def _set_morphs(body,weights,*,oral_assets=None):
     import bpy
     keys=body.data.shape_keys
     if keys is None:
@@ -69,6 +69,15 @@ def _set_morphs(body,weights):
         if key.name=='Basis': continue
         key.value=float(weights.get(key.name,0))
         key.keyframe_insert(data_path='value',frame=1)
+    for category,obj in (oral_assets or {}).items():
+        if obj.data.shape_keys is None:
+            raise RuntimeError('E_ORAL_CORRECTIVE_KEYS_MISSING_'+category)
+        oral_keys=obj.data.shape_keys.key_blocks
+        for name in ('jawOpen','viseme_aa'):
+            if name not in oral_keys:
+                raise RuntimeError('E_ORAL_CORRECTIVE_KEY_MISSING_'+name)
+            oral_keys[name].value=float(weights.get(name,0.0))
+            oral_keys[name].keyframe_insert(data_path='value',frame=1)
     bpy.context.scene.frame_set(1)
     bpy.context.view_layer.update()
 
@@ -99,21 +108,22 @@ def _evaluated_world_vertices(objects):
     return result
 
 
-def _audit_jaw_and_visemes(body,assets):
+def _audit_jaw_and_visemes(body,assets,*,use_oral_correctives=False):
     from character.anatomy_motion_audit import diagnose_oral_motion
     objects={'body':body,'teeth':assets['teeth'],'tongue':assets['tongue']}
-    _set_morphs(body,{})
+    controlled={category:assets[category] for category in ('teeth','tongue')} if use_oral_correctives else None
+    _set_morphs(body,{},oral_assets=controlled)
     before=_evaluated_world_vertices(objects)
     reports={}
     for pose in ('jaw_open','viseme_aa'):
-        _set_morphs(body,POSES[pose])
+        _set_morphs(body,POSES[pose],oral_assets=controlled)
         after=_evaluated_world_vertices(objects)
         reports[pose]=diagnose_oral_motion(before,after,pose=pose)
-    _set_morphs(body,{})
+    _set_morphs(body,{},oral_assets=controlled)
     return reports
 
 
-def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=False):
+def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False):
     import bpy
     import numpy as np
     from bl_ext.user_default.mpfb.services import (
@@ -121,6 +131,8 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
     from video.render_talk import camera_and_lights
     from tools.mpfb_headless_probe import _stash_armature_modifier
 
+    if oral_correctives and not (align_accessories and audit_oral_motion):
+        raise ValueError('E_ORAL_CORRECTIVES_REQUIRE_ALIGNMENT_AND_AUDIT')
     output=Path(output).resolve()
     if output.exists() or output.is_symlink():
         raise FileExistsError('E_ANATOMY_POSE_OUTPUT_EXISTS')
@@ -226,6 +238,13 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
     if len(names)!=67 or not set().union(*(set(x) for x in POSES.values())).issubset(set(names)):
         raise RuntimeError('E_ANATOMY_67_MORPH_INTERFACE')
 
+    oral_corrective_audit=None
+    if oral_correctives:
+        from character.oral_correctives import add_oral_shape_keys
+        oral_corrective_audit=add_oral_shape_keys(
+            body,{category:actual_assets[category] for category in ('teeth','tongue')})
+    controlled={category:actual_assets[category] for category in ('teeth','tongue')} if oral_correctives else None
+
     # Remove the original character so it cannot obscure the cloned one.
     for obj in list(bpy.data.objects):
         if obj not in copies:
@@ -244,13 +263,15 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
     camera_and_lights(scene,list(actual_assets.values())+[body],
                       'negative-y','studio')
 
-    oral_motion_audit=_audit_jaw_and_visemes(body,actual_assets) if audit_oral_motion else None
+    oral_motion_audit=(_audit_jaw_and_visemes(
+        body,actual_assets,use_oral_correctives=oral_correctives)
+        if audit_oral_motion else None)
 
     images=[]
     for label,weights in POSES.items():
-        _set_morphs(body,weights)
+        _set_morphs(body,weights,oral_assets=controlled)
         images.append(_render(scene,body,'front_'+label,0,output))
-    _set_morphs(body,POSES['jaw_open'])
+    _set_morphs(body,POSES['jaw_open'],oral_assets=controlled)
     images.append(_render(scene,body,'three_quarter_jaw_open',38,output))
     report={
         'schema':SCHEMA,'character_id':character,
@@ -268,6 +289,9 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
         'anatomy_alignment_mode':(
             'shared_identity_field' if align_accessories else 'original_mpfb_fit'),
         'anatomy_alignment_audit':alignment_audits,
+        'oral_corrective_mode':('MORPH_LINKED_LOWER_TEETH_AND_TONGUE'
+                                 if oral_correctives else 'OFF'),
+        'oral_corrective_audit':oral_corrective_audit,
         'oral_motion_audit':oral_motion_audit,
         'oral_motion_status':('RECORDED_DO_NOT_INFER_VISUAL_APPROVAL'
                               if oral_motion_audit else 'NOT_RUN'),
@@ -297,10 +321,12 @@ if __name__=='__main__':
     parser.add_argument('--character',choices=('demo_head_a','demo_head_b'),required=True)
     parser.add_argument('--plan',type=Path,required=True)
     parser.add_argument('--out',type=Path,required=True)
+    parser.add_argument('--oral-correctives',action='store_true',
+                        help='Opt-in lower dental/tongue corrective morphs; requires --align-accessories --audit-oral-motion')
     parser.add_argument('--audit-oral-motion',action='store_true',
                         help='Measure evaluated teeth/tongue world motion for jawOpen and AA')
     parser.add_argument('--align-accessories',action='store_true',
                         help='Apply same detailed identity field to copied eyes/teeth/tongue')
     args=parser.parse_args(sys.argv[sys.argv.index('--')+1:])
     run(args.character,args.plan,args.out,align_accessories=args.align_accessories,
-        audit_oral_motion=args.audit_oral_motion)
+        audit_oral_motion=args.audit_oral_motion,oral_correctives=args.oral_correctives)
