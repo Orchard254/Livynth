@@ -228,7 +228,7 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
         try:
             report.update(prove_rigged_teeth_seam(
                 source_assets['teeth'],actual_assets['teeth'],copy_rig,
-                teeth_meta,dental_source['_absolute_path_for_blender_only']))
+                teeth_meta))
         except Exception as exc:
             report.update({
                 'status':'FAIL_RIGGED_SEAM_COPY_NOT_PRODUCTION_QA',
