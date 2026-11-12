@@ -165,6 +165,42 @@ Run on the owner PC without rebuilding GLBs:
 See docs/IDENTITY_RENDERED_POSE_007.md. Even a complete render manifest
 means CAPTURED_REQUIRES_HUMAN_VISUAL_REVIEW, not approved likeness or animation.
 
+## IDENTITY-007 owner Windows rendered pose A/B: capture PASS (2026-11-12)
+
+Owner ran python tools/run_identity_pose_review.py against the **existing two GLBs**
+using Blender 4.5.10 / MPFB build 20261010, after pulling commit 42c8f1b.
+Both Blender processes completed normally. Each character rendered seven front
+(neutral, blink, jaw_open, viseme_aa, viseme_pp, smile, pucker) and three
+three-quarter (neutral, blink, jaw_open) views, producing **20 PNG stills total**.
+All **16 non-neutral poses** were flagged SIGNAL_PRESENT_NOT_VISUAL_APPROVAL by
+the face-crop pixel QA. Aggregate pose_review.json:
+CAPTURED_REQUIRES_HUMAN_VISUAL_REVIEW, existing GLB morph signal PASS,
+raster signal PASS_VISIBLE_DIFFERENCES_NOT_VISUAL_QUALITY,
+expression_naturalness PENDING_HUMAN_REVIEW.
+
+**The log is not the PNGs.** Independent checks for eye closure, clean jaw
+motion, lip contact and morphological naturalness remain PENDING until the
+rendered images are actually inspected; no full narrated video, hair/skin
+realism or identity likeness is claimed from this numeric result.
+
+## IDENTITY-008 — package existing pose images for visual review
+
+New tools/package_identity_pose_review.py assembles the existing 20 PNGs,
+the two Blender reports, pose_review.json, a reconstructed side-by-side
+index.html and a SHA256 manifest into a portable ZIP. It validates image
+payloads and report coverage, blocks symlinks, and deliberately excludes the
+original GLBs and private reference photographs. Seven unit tests are
+authored for missing/corrupt poses, overwrite refusal and whitelist
+isolation; actual packager runtime not yet reported. The original JSON
+reports retain local Windows paths for provenance, so review them before
+sharing.
+
+Command (no rerender):
+python tools/package_identity_pose_review.py --folder output\identity_ab\20261112_045945_179772\pose_review\20261112_060832_140286
+
+See docs/IDENTITY_REVIEW_PACK_008.md. Character 001 five-view likeness
+Phase-3 remains **FAIL**.
+
 ## Explicit next acceptance gates
 
 1. **Owner Windows integrated smoke**: open the Studio, inspect actual neutral PNG, render a 30-frame MP4 and confirm it visually plays with audible speech; save `studio_run.json` and Blender diagnostics. Fail any stage that is black, visually incorrect, silent, or crashes. Repeat with `--mode demo` before release.
