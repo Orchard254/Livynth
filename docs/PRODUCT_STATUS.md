@@ -498,6 +498,51 @@ tool deliberately reports failure rather than guessing. Next:
     python tools/run_anatomy_ab_review.py --align-accessories --audit-oral-motion --oral-correctives --mhclo-dentition
 
 Character 001 photographic identity likeness remains Phase-3 FAIL.
+## IDENTITY-015 owner Windows signed/weight mapping integration: FAIL (2026-11-12)
+
+Owner pulled development commit c44f6c1 and ran 14/14 focused
+`test_mhclo_dentition.py` cases successfully. The first actual
+Blender 4.5.10 / MPFB 20261010 Head A run then failed
+at `character/mhclo_dentition.py:E_MHCLO_BAD_WEIGHTS`
+before rendering. The follow-on anatomy_pose_report.json
+FileNotFoundError is consequential: Blender exited without output.
+Earlier MPFB procedural eye material node socket warnings did not
+stop object import and are tracked separately.
+
+**No IDENTITY-015 jaw segmentation PASS / visual result exists.**
+The installed teeth_base MHCLO's actual numerical coefficients were
+not included in the console log. Synthetic weight-positive unit
+tests therefore did not model this real asset.
+
+## IDENTITY-016 — source-weight attribution fix and cheap asset preflight
+
+Previous validation wrongly combined two separate requirements:
+MHCLO interpolation coefficients were required to be nonnegative
+and sum to one, even though our jaw classification only requires
+the **significant source vertices** to come from one helper group.
+New mapping assigns upper/lower by absolute coefficient contribution
+from documented HM08 helper references. It still rejects mixed
+jaws, non-dental source contribution, all-zero/invalid weights
+and mixed-jaw faces. It records signed and nonunit-weight counts.
+
+Added an MPFB metadata-only installed-teeth preflight that checks the
+pinned source SHA, parses its referenced OBJ topology and MHCLO
+weights, and writes a small diagnostic JSON even on mapping failure.
+Does not construct a human, render, or change GLB files.
+Five new jaw-mapping negative/positive tests and eleven
+metadata/runner tests authored, **not yet run on Windows**.
+
+First owner action after pulling development:
+
+    python -m unittest discover -s tests -p "test_mhclo_dentition.py" -v
+    python -m unittest discover -s tests -p "test_mhclo_dental_preflight.py" -v
+    python tools/run_mpfb_dental_preflight.py
+
+Only if status is PASS_REAL_MHCLO_JAW_GROUP_MAPPING_NOT_VISUAL_QA
+proceed with the original IDENTITY-015 Blender A/B render.
+On failure upload `dentition_probe.json` and do not repeatedly
+rebuild the two characters. See docs/IDENTITY_DENTAL_PREFLIGHT_016.md.
+Character 001 source-photo five-view gate remains FAIL.
 ## Explicit next acceptance gates
 
 1. **Owner Windows integrated smoke**: open the Studio, inspect actual neutral PNG, render a 30-frame MP4 and confirm it visually plays with audible speech; save `studio_run.json` and Blender diagnostics. Fail any stage that is black, visually incorrect, silent, or crashes. Repeat with `--mode demo` before release.
