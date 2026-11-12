@@ -87,7 +87,8 @@ def dental_influence(points_in_body_space, *, category):
     return weights
 
 
-def corrected_asset_points(points_in_body_space, translation_body, *, category):
+def corrected_asset_points(points_in_body_space, translation_body, *, category,
+                           lower_teeth_mask=None):
     p = _vertices(points_in_body_space, 'ASSET')
     shift = np.asarray(translation_body, dtype=np.float64)
     if shift.shape != (3,) or not np.isfinite(shift).all():
@@ -95,7 +96,17 @@ def corrected_asset_points(points_in_body_space, translation_body, *, category):
     magnitude = float(np.linalg.norm(shift))
     if magnitude < 0.001 or magnitude > MAX_CORRECTIVE_M:
         raise OralCorrectiveError('E_JAW_TRANSLATION_UNSAFE')
-    weights = dental_influence(p, category=category)
+    if lower_teeth_mask is not None:
+        if category!='teeth':
+            raise OralCorrectiveError('E_DENTAL_MASK_ON_NON_TEETH')
+        weights=np.asarray(lower_teeth_mask,dtype=np.float64)
+        if (weights.shape!=(len(p),) or not np.isfinite(weights).all() or
+            not np.isin(weights,[0.0,1.0]).all()):
+            raise OralCorrectiveError('E_DENTAL_MASK_INVALID')
+        if min(np.count_nonzero(weights),np.count_nonzero(weights==0))<max(20,len(p)//10):
+            raise OralCorrectiveError('E_DENTAL_MASK_UNBALANCED')
+    else:
+        weights = dental_influence(p, category=category)
     moved = p + weights[:, None] * shift[None, :]
     distance = np.linalg.norm(moved - p, axis=1)
     return moved, {
@@ -104,12 +115,16 @@ def corrected_asset_points(points_in_body_space, translation_body, *, category):
         'moved_vertices_gt_0_1_mm': int(np.count_nonzero(distance > 0.0001)),
         'stationary_vertices_lt_0_1_mm': int(np.count_nonzero(distance <= 0.0001)),
         'max_displacement_m': round(float(distance.max()), 9),
+        'dentition_segmentation':('MHCLO_UPPER_LOWER_HELPER_GROUPS' if
+            category=='teeth' and lower_teeth_mask is not None else
+            'LEGACY_Z_HEIGHT_MASK' if category=='teeth' else 'TONGUE_WHOLE_MESH'),
         'morph_name_contract': 'SAME_FACE_MORPH_NAMES_ON_ACCESSORY',
         'visual_anatomy': 'PENDING_REVIEW',
     }
 
 
-def add_oral_shape_keys(body, assets):
+def add_oral_shape_keys(body, assets, *, lower_teeth_mask=None,
+                        dental_mapping_report=None):
     """Build accessory-only corrective shapes on a copied Blender scene.
 
     No jaw bone, source body, or already-exported GLB is modified. Each
@@ -145,7 +160,8 @@ def add_oral_shape_keys(body, assets):
         planned = {}
         for pose in POSE_TO_KEY:
             dest, metrics = corrected_asset_points(
-                original, translations[pose], category=category)
+                original, translations[pose], category=category,
+                lower_teeth_mask=lower_teeth_mask if category=='teeth' else None)
             planned[pose] = (dest, metrics)
         pending[category] = (asset, planned)
 
@@ -161,5 +177,7 @@ def add_oral_shape_keys(body, assets):
                 shape.data[i].co = asset_from_world @ world
             shape.value = 0.0
             audits[pose][category] = metrics
+            if dental_mapping_report is not None:
+                audits[pose]['dentition_mapping']=dental_mapping_report
         asset.data.update()
     return audits
