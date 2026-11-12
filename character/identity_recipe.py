@@ -8,6 +8,7 @@ import re
 import struct
 
 SCHEMA = 'livynth.identity.recipe.v1'
+SCHEMA_V2 = 'livynth.identity.recipe.v2'
 MACROS = frozenset(('gender','age','muscle','weight','proportions','height','race'))
 RACES = frozenset(('african','asian','caucasian'))  # Names from MPFB API
 
@@ -28,10 +29,16 @@ def _fraction(x, label):
     return float(x)
 
 def validate_recipe(data):
-    if not isinstance(data,dict) or set(data) != {'schema','character_id','source','macros'}:
+    if not isinstance(data,dict):
         raise InvalidIdentityRecipe('E_RECIPE_FIELDS')
-    if data['schema'] != SCHEMA:
+    schema=data.get('schema')
+    if schema not in (SCHEMA,SCHEMA_V2):
         raise InvalidIdentityRecipe('E_RECIPE_SCHEMA')
+    fields={'schema','character_id','source','macros'}
+    if schema==SCHEMA_V2:
+        fields.add('head_shape')
+    if set(data)!=fields:
+        raise InvalidIdentityRecipe('E_RECIPE_FIELDS')
     if not isinstance(data['character_id'],str) or not re.fullmatch(r'[a-z][a-z0-9_-]{1,39}', data['character_id']):
         raise InvalidIdentityRecipe('E_CHARACTER_ID')
     if data['source'] != 'manual_parameters':
@@ -50,8 +57,15 @@ def validate_recipe(data):
             if abs(sum(race.values())-1)>1e-6:
                 raise InvalidIdentityRecipe('E_RACE_SUM')
             result['race']=race
-    return {'schema':SCHEMA,'character_id':data['character_id'],
-            'source':'manual_parameters','macros':result}
+    normalized={'schema':schema,'character_id':data['character_id'],
+                'source':'manual_parameters','macros':result}
+    if schema==SCHEMA_V2:
+        from character.head_shape import InvalidHeadShape,validate_controls
+        try:
+            normalized['head_shape']=validate_controls(data['head_shape'])
+        except InvalidHeadShape as exc:
+            raise InvalidIdentityRecipe(str(exc)) from exc
+    return normalized
 
 def load_recipe(path):
     try:

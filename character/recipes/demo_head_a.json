@@ -1,0 +1,1 @@
+{"schema":"livynth.identity.recipe.v2","character_id":"demo_head_a","source":"manual_parameters","macros":{"gender":1,"age":0.5,"muscle":0.5,"weight":0.5,"proportions":0.5,"height":0.5,"race":{"african":0,"asian":0,"caucasian":1}},"head_shape":{"cranial_width":0.68,"jaw_width":-0.56,"cheek_fullness":0.68,"nose_projection":0.64,"mouth_width":-0.64,"chin_length":0.56}}

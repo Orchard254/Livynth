@@ -20,6 +20,22 @@ def compare(a, b):
         audit=report.get('glb_audit') or {}
         if (audit.get('joint_count'),audit.get('morph_targets_in_exported_glb'))!=(163,67) or not audit.get('skin_present'):
             raise IdentityComparisonError('E_RIG_MORPH_'+label)
+    # When testing same-macro head recipes, require proof that both shapes
+    # were actually applied on the same native source, not just two GLB files.
+    sa, sb = a.get('identity_head_shape'), b.get('identity_head_shape')
+    if bool(sa) != bool(sb):
+        raise IdentityComparisonError('E_HEAD_SHAPE_AUDIT_MISSING')
+    if sa is not None:
+        for label, audit, report in (('a',sa,a),('b',sb,b)):
+            if (audit.get('status') != 'PASS_LOCAL_QUADS_NOT_GLOBAL_INTERSECTIONS' or
+                audit.get('min_triangle_area_ratio',0) < 0.4 or
+                audit.get('max_displacement_m',1) > 0.025 or
+                audit.get('moved_vertices_gt_0_1_mm',0) < 100 or
+                audit.get('output_positions_sha256') !=
+                report['neutral_identity_geometry']['positions_sha256']):
+                raise IdentityComparisonError('E_HEAD_SHAPE_AUDIT_'+label)
+        if sa.get('source_positions_sha256')!=sb.get('source_positions_sha256'):
+            raise IdentityComparisonError('E_HEAD_SOURCE_DIFFERENT')
     ga,gb=a['neutral_identity_geometry'],b['neutral_identity_geometry']
     if (ga['vertex_count'],ga['quad_count'],ga['topology_sha256']) != (gb['vertex_count'],gb['quad_count'],gb['topology_sha256']):
         raise IdentityComparisonError('E_DIFFERENT_TOPOLOGY')

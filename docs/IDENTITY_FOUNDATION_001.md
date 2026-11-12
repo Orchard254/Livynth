@@ -18,6 +18,10 @@ One MPFB base topology and one rig/morph system should generate **different manu
 6. `tests/test_identity_recipe.py`: strict validation + positive/negative structural controls and exporter argument tests.
 7. Studio CLI and GUI accept an **optional identity recipe JSON** when creating a character. This is mutually exclusive with an existing GLB; all baseline behavior without a recipe remains unchanged.
 
+## Detailed same-template head variants (IDENTITY-003)
+
+For the clearest reusable-identity proof, the one-command Blender A/B runner now defaults to **demo_head_a.json** and **demo_head_b.json**: their original MPFB macro settings are identical, but their six local facial geometry coefficients differ. Each uses the same native quad layout, and the comparison requires identical undeformed-source SHA and successful postfit GLB rig/morph/UV audits. Numeric OBJ-only previews can be made from the owner neutral ZIP with tools/run_head_shape_offline.py, but they are not animated characters. See docs/IDENTITY_HEAD_SHAPE_003.md.
+
 ## One-command A/B test (recommended)
 
 The Windows workstation with Blender 4.5.10 and MPFB installed can run the whole build-and-compare gate from the LIVYNTH repository root:

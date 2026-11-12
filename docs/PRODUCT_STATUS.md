@@ -89,6 +89,14 @@ Added `tools/run_identity_ab.py`, a one-command local Blender A/B production+com
 
 **Evidence:** 5/5 focused A/B orchestration tests passed in the authoring environment (distinct commands, duplicate recipe refusal, overwrite refusal, first-error stop, missing-report negative test). The combined local identity module+runner check passed **23/23** here. Full LIVYNTH suite and actual Windows Blender A/B two-export run remain **UNVERIFIED**. This does not fit reference images, and Character 001 likeness Phase-3 is still FAIL. Exact command: `python tools/run_identity_ab.py`.
 
+## IDENTITY-003 — native head-shape identity variation (2026-11-12)
+
+**Real source mesh geometric variation PASS; animated GLB A/B still NOT RUN.** Using owner's original 13,380-vertex, 13,378-quad neutral NPZ (native positions SHA 64b001da1ec4a4094cfa7ce1da3aee3b2a9da7d570492c6a56d76e78a47eb542), two detailed 6-control identity recipes with *identical broad MPFB macro values* generated numerically different faces with unchanged quad connectivity. Maximum A/B position difference 20.82 mm, 4,318 vertices different by more than 1 mm, and no local triangle fold detected (area minima 0.502 and 0.772). Global self-intersections, eye collisions and visual likeness are UNVERIFIED.
+
+Feature branch adds recipe v2 (backwards compatible v1), bounded native head deformation before FaceService loads ARKit/Meta targets, same-source audit comparison, and OBJ-only numeric proof CLI. Default Blender A/B runner now uses these two same-macro variants. **42/42 combined local unit/negative/real-neutral tests passed** in the authoring environment. Full project suite and both MPFB Blender exports are UNVERIFIED. Refer to docs/IDENTITY_HEAD_SHAPE_003.md for the exact commands and acceptance criteria.
+
+**This is a significant reusable-geometry milestone, NOT automatic reconstruction from photos.** Photo landmark/camera fitting has not yet been implemented, and Character 001 Phase-3 likeness remains FAIL.
+
 ## Explicit next acceptance gates
 
 1. **Owner Windows integrated smoke**: open the Studio, inspect actual neutral PNG, render a 30-frame MP4 and confirm it visually plays with audible speech; save `studio_run.json` and Blender diagnostics. Fail any stage that is black, visually incorrect, silent, or crashes. Repeat with `--mode demo` before release.
