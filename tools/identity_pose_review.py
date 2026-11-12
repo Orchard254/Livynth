@@ -8,6 +8,7 @@ import html
 import math
 from pathlib import Path
 import struct
+import zlib
 
 POSES = {
     'neutral': {},
@@ -37,16 +38,63 @@ def render_jobs():
 
 
 def check_png_dimensions(path, width, height):
-    """Minimal PNG IHDR check: file exists and dimensions are as expected."""
+    """Check full PNG chunks, CRC, RGBA 8-bit data and expected dimensions.
+
+    PNG files are the human review evidence: accepting a signature-only fake
+    would allow a render to be called successful without actual image data.
+    """
     path = Path(path)
-    with path.open('rb') as fh:
-        hdr = fh.read(24)
-    if len(hdr) < 24 or hdr[:8] != b'\x89PNG\r\n\x1a\n' or hdr[12:16] != b'IHDR':
+    data = path.read_bytes()
+    if not 70 <= len(data) <= 20_000_000 or data[:8] != b'\x89PNG\r\n\x1a\n':
         raise PoseReviewError('E_NOT_PNG: ' + str(path))
-    size = struct.unpack('>II', hdr[16:24])
-    if size != (width, height):
-        raise PoseReviewError('E_PNG_DIMENSIONS: ' + str(size))
-    return size
+    i = 8
+    seen_ihdr = seen_iend = False
+    compressed = bytearray()
+    while i < len(data):
+        if i+12 > len(data):
+            raise PoseReviewError('E_PNG_TRUNCATED')
+        length, = struct.unpack_from('>I', data, i)
+        end = i + length + 12
+        if length > len(data) or end > len(data):
+            raise PoseReviewError('E_PNG_TRUNCATED')
+        tag = data[i+4:i+8]
+        payload = data[i+8:i+8+length]
+        expected_crc, = struct.unpack_from('>I', data, i+8+length)
+        if zlib.crc32(tag+payload) & 0xffffffff != expected_crc:
+            raise PoseReviewError('E_PNG_CRC')
+        if tag == b'IHDR':
+            if seen_ihdr or i != 8 or length != 13:
+                raise PoseReviewError('E_PNG_IHDR')
+            image_w, image_h, depth, color, comp, filt, interlace = struct.unpack('>IIBBBBB', payload)
+            if (image_w, image_h) != (width,height):
+                raise PoseReviewError('E_PNG_DIMENSIONS')
+            if (depth,color,comp,filt,interlace)!=(8,6,0,0,0):
+                raise PoseReviewError('E_PNG_RGBA_FORMAT')
+            seen_ihdr = True
+        elif tag == b'IDAT':
+            if not seen_ihdr or seen_iend:
+                raise PoseReviewError('E_PNG_IDAT_ORDER')
+            compressed.extend(payload)
+        elif tag == b'IEND':
+            if not seen_ihdr or length != 0 or end != len(data):
+                raise PoseReviewError('E_PNG_IEND')
+            seen_iend = True
+        elif tag and tag[0] & 32 == 0:
+            raise PoseReviewError('E_PNG_UNKNOWN_CRITICAL')
+        i = end
+    if not seen_iend or not compressed:
+        raise PoseReviewError('E_PNG_MISSING_IMAGE_DATA')
+    try:
+        decompressed=zlib.decompress(compressed)
+    except zlib.error as exc:
+        raise PoseReviewError('E_PNG_INVALID_DEFLATE') from exc
+    if len(decompressed)!=height*(1+width*4):
+        raise PoseReviewError('E_PNG_PIXEL_BYTE_COUNT')
+    # Every PNG row begins with one of the five permitted filter methods.
+    stride=1+width*4
+    if any(decompressed[y*stride] > 4 for y in range(height)):
+        raise PoseReviewError('E_PNG_INVALID_FILTER')
+    return width,height
 
 
 def raster_change(neutral_rgba, posed_rgba, width, height, *,
