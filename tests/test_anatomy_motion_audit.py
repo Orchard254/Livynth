@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from character.anatomy_motion_audit import (
-    SCHEMA,OralMotionError,displacement_stats,diagnose_oral_motion)
+    SCHEMA,OralMotionError,displacement_stats,diagnose_oral_motion,classify_motion_stats)
 from tools.run_anatomy_ab_review import plan,validate_character,AnatomyABError
 
 ROOT=Path(__file__).resolve().parents[1]
@@ -71,6 +71,22 @@ class MotionMetricsTests(unittest.TestCase):
         del posed['tongue']
         with self.assertRaisesRegex(OralMotionError,'E_MOTION_OBJECT_SET'):
             diagnose_oral_motion(initial,posed,pose='jaw_open')
+    def test_malformed_motion_stats_cannot_claim_success(self):
+        source,changed=snapshots(teeth_m=.002,tongue_m=.004)
+        stats=diagnose_oral_motion(source,changed,pose='jaw_open')['stats']
+        self.assertEqual(classify_motion_stats(stats),
+                         'ORAL_MOTION_PRESENT_NOT_VISUALLY_APPROVED')
+        stats['tongue']['moved_vertices_gt_0_1_mm']=0
+        with self.assertRaisesRegex(OralMotionError,'E_MOTION_METRICS_INCONSISTENT'):
+            classify_motion_stats(stats)
+
+    def test_neither_undercount_nor_overcount_allowed(self):
+        source,changed=snapshots()
+        stats=diagnose_oral_motion(source,changed,pose='jaw_open')['stats']
+        stats['body']['moved_vertices_gt_0_1_mm']=121
+        with self.assertRaisesRegex(OralMotionError,'E_MOTION_METRICS_INVALID_body'):
+            classify_motion_stats(stats)
+
     def test_stats_respect_real_units(self):
         original=sample_coords()
         later=original.copy();later[:,2]+=0.005
