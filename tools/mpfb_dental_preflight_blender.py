@@ -17,7 +17,8 @@ if str(ROOT) not in sys.path:
 from character.native_anatomy import load_plan,verify_asset_file
 from character.mhclo_dentition import classify_dentition_mhclo,DentitionMappingError
 from tools.mhclo_dental_preflight import (
-    SCHEMA,load_obj_topology,inspect_mhclo_weights)
+    SCHEMA,load_obj_topology,inspect_mhclo_weights,
+    diagnose_mixed_jaw_faces,DentalPreflightError)
 
 
 def inspect(plan_file,out):
@@ -61,6 +62,14 @@ def inspect(plan_file,out):
             'first_error':str(exc),
             'jaw_assignment':'NOT_ACCEPTED',
         })
+        if str(exc).startswith('E_MHCLO_MIXED_UPPER_LOWER_FACE'):
+            try:
+                result['mixed_face_diagnostics']=diagnose_mixed_jaw_faces(
+                    metadata.verts,faces)
+            except DentalPreflightError as diagnostic_exc:
+                # Diagnostic failure must never relabel a failed mapping PASS,
+                # or prevent writing the original failure to JSON.
+                result['mixed_face_diagnostic_error']=str(diagnostic_exc)
     out.parent.mkdir(parents=True,exist_ok=True)
     out.write_text(json.dumps(result,indent=2)+'\n',encoding='utf-8')
     print('[LIVYNTH DENTAL PREFLIGHT] '+json.dumps({
