@@ -72,7 +72,10 @@ def validate(data,output):
             item.get('source_geometry_modified') is not False or
             item.get('rendered_visual_inference')!='PENDING_INDEPENDENT_REVIEW'):
             raise IsolationReviewError('E_ID023_VISIBILITY_AUDIT')
-        check_png_dimensions(Path(output)/(name+'.png'),400,600)
+    # Validate every visibility label before touching the disk. A broken
+    # metadata contract must not be obscured by missing synthetic PNG fixtures.
+    for name in FILES:
+        check_png_dimensions(Path(output)/name,400,600)
     return True
 
 
