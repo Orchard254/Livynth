@@ -11,7 +11,7 @@ from tools.mpfb_asset_inventory import CATEGORIES,make_inventory
 
 def inspect_assets(out):
     import bpy
-    from bl_ext.user_default.mpfb.services.assetservice import AssetService
+    from bl_ext.user_default.mpfb.services import AssetService
     from bl_ext.user_default import mpfb
     roots={category: AssetService.get_asset_roots(category) for category in CATEGORIES}
     installed=AssetService.system_assets_pack_is_installed()
