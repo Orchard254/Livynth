@@ -290,6 +290,42 @@ Next one-command Windows check:
 after pulling the development branch. **Character 001 image-reconstruction
 Phase-3 remains FAIL.**
 
+## IDENTITY-010 owner Windows native anatomy attachment: PASS (2026-11-12)
+
+The owner supplied anatomy_probe.json and actual 480×720 neutral front and
+three-quarter images. All three selected native MPFB assets are present,
+fitted and armature-bound to Human.rig: high-poly blue eyes (1,064 vertices,
+1,020 faces), teeth_base (3,868 vertices, 3,560 faces) and tongue01
+(226 vertices, 224 faces). Rig has 163 bones. Iris/eyeball surfaces are
+visibly present and roughly aligned. Teeth and tongue remain hidden by
+closed lips and have NOT been evaluated during jaw/lip motion.
+
+The raw unbaked source body has 19,158 vertices; the existing detailed
+baked Head A/B GLBs have 13,380 native body vertices. This is expected
+staging, not proof of compatible detailed identity or export.
+IDENTITY-010 attachment success does NOT test body head_shape variation,
+facial morphs, GLB export or independent photographic likeness.
+
+## IDENTITY-011 — fitted native anatomy across BOTH detailed facial identities
+
+A new isolated experimental runner constructs a fresh rigged human with
+the exact SHA-pinned eyes/teeth/tongue, duplicates through ExportService,
+bakes the body, applies each detailed head_shape, builds the 67 familiar
+facial targets and captures matched neutral, blink, jaw and viseme stills
+for demo_head_a and demo_head_b. It verifies the native body topology,
+source/fitted fingerprints, copied asset armature binding and 163/67
+contracts. On success it packages twelve PNGs plus reports/gallery into
+a portable ZIP. The existing successful GLBs are never modified.
+
+**Status: newly authored code and ten focused tests; Windows Blender
+integration and new unit suite NOT RUN yet.** The tool intentionally
+does not call a pose sequence an expression quality PASS. Visual inspection
+is needed to see whether rigged tongue/teeth follow morph-only jaw movement.
+Original Character 001 five-angle likeness Phase-3 remains FAIL.
+
+Owner next one-command gate after pull:
+python tools/run_anatomy_ab_review.py
+See docs/IDENTITY_ANATOMY_AB_011.md.
 ## Explicit next acceptance gates
 
 1. **Owner Windows integrated smoke**: open the Studio, inspect actual neutral PNG, render a 30-frame MP4 and confirm it visually plays with audible speech; save `studio_run.json` and Blender diagnostics. Fail any stage that is black, visually incorrect, silent, or crashes. Repeat with `--mode demo` before release.
