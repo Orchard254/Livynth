@@ -88,6 +88,8 @@ def _parse_args():
         raise ValueError("--stage1-template and --stage1-constraints are exclusive")
     if stage1_constraints and stage1_neutral_dump:
         raise ValueError("Neutral mesh dump must be captured BEFORE a fit; do not combine with constraints")
+    if identity_recipe and stage1_constraints:
+        raise ValueError("Identity recipe and experimental Stage-1 constraints cannot be combined until both transforms are audited")
     return out, json_out, rig, stage1_template, stage1_constraints, stage1_neutral_dump, identity_recipe
 
 
