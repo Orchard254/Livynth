@@ -63,6 +63,16 @@ The owner uploaded the actual `livynth_smoke.mp4` and `studio_run.json`. The 56,
 
 **STUDIO-006 corrective action:** reversible diagnostic-only framing, clay face vs navy placeholder shirt, moderately brighter lights. Original GLB geometry and rig remain unchanged. The change requires a new **one-frame Windows portrait preview** for acceptance; do not render a costly full video until appearance is reviewed.
 
+## STUDIO-006 owner preview: partial visual improvement, wardrobe FAIL (2026-11-12)
+
+Owner uploaded the real 540×960 `livynth_preview.png` after the STUDIO-006 preview changes.
+
+- **Framing and lighting improve:** face is larger, visibly readable, normal geometry features discernible.
+- **Wardrobe still FAIL:** a sampled forehead region has median RGB approximately (188,173,165), while the center chest sample is approximately (199,186,178), both warm clay; no dark navy garment visibly appears. Counting assigned material polygons is insufficient to prove rendered visibility.
+- **Finished eyes absent:** the eye apertures appear pale and patterned, with no readable pupils/irises. Bald/generic skull and missing realistic skin/wardrobe persist. Identity likeness Phase-3 remains FAIL.
+- **STUDIO-007 proposed patch:** raise the center shirt neckline threshold from 0.22 to 0.17 of total height below the crown (shoulder profile from 0.055 to 0.045), explicitly attach skin/shirt materials to imported mesh DATA slots, refresh mesh after material-index assignment, and compare actual rendered forehead-vs-torso RGB. A one-frame Studio preview now fails clearly if navy clothing is not visible. Old baseline geometry and GLB are unchanged. Numerical equivalence tests pass, but new Blender visual QA **UNVERIFIED** until next owner preview.
+- **Product priority:** this is a reversible diagnostic garment only, not real cloth. Next real look-development efforts must integrate recognizable eyeballs/iris, hair, skin PBR and validated Character 001 anatomy. Do not imply diagnostic clay is photorealistic.
+
 ## Explicit next acceptance gates
 
 1. **Owner Windows integrated smoke**: open the Studio, inspect actual neutral PNG, render a 30-frame MP4 and confirm it visually plays with audible speech; save `studio_run.json` and Blender diagnostics. Fail any stage that is black, visually incorrect, silent, or crashes. Repeat with `--mode demo` before release.

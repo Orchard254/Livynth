@@ -101,7 +101,10 @@ def shirt_cutoff(x, z, horizontal_center, crown, height):
     if height <= 0:
         raise ValueError('Height must be positive')
     shoulder = min(1.0, abs(x-horizontal_center)/(0.22*height))
-    neckline = crown - height*(0.22 - 0.055*shoulder)
+    # Previous cut (0.22 of whole-body height at the center) was almost
+    # entirely below the visible area of the approved close-up camera. This
+    # raises the neck opening without coloring the face or ear region.
+    neckline = crown - height*(0.17 - 0.045*shoulder)
     return z < neckline
 
 
@@ -174,6 +177,11 @@ def add_preview_shirt(meshes):
             bsdf.inputs['Metallic'].default_value = 0.0
         body.data.materials.append(mat)
         indexes[role] = len(body.data.materials)-1
+        # Imported glTF object slots can be linked to object overrides;
+        # explicitly bind our diagnostic materials to mesh DATA slots.
+        slot = body.material_slots[indexes[role]]
+        slot.link = 'DATA'
+        slot.material = mat
     vertices = body.data.vertices
     matrix = body.matrix_world
     assigned = 0
@@ -190,8 +198,71 @@ def add_preview_shirt(meshes):
             clay_faces += 1
     if not assigned or not clay_faces:
         raise RuntimeError('Studio preview material mask has no shirt or visible skin')
+    body.data.update()
+    bpy.context.view_layer.update()
     print(f'[Livynth] Studio diagnostic materials: {clay_faces} clay and '
           f'{assigned} navy-shirt polygons; no geometry changed')
+
+
+def assess_preview_wardrobe(face_rgb, torso_rgb):
+    """Check *visible* blue-shirt contrast, not only Blender material indices.
+
+    RGB can be 0..1 linear or 0..255 display values. This is a diagnostic
+    presentation check, not a photorealism, identity or segmentation metric.
+    """
+    if len(face_rgb) != 3 or len(torso_rgb) != 3:
+        raise ValueError('Expected RGB triples for preview contrast')
+    if any(not math.isfinite(float(v)) or float(v) < 0 for v in (*face_rgb, *torso_rgb)):
+        raise ValueError('Invalid pixel channels for preview contrast')
+    def luminance(rgb):
+        return sum(float(v)*w for v,w in zip(rgb,(0.2126,0.7152,0.0722)))
+    face_l = luminance(face_rgb)
+    torso_l = luminance(torso_rgb)
+    relative = torso_l / max(face_l, 1e-5)
+    navy_blue = float(torso_rgb[2]) >= 1.15 * max(float(torso_rgb[0]),1e-5)
+    return {
+        'status': 'PASS_VISIBLE_NAVY_SHIRT' if relative <= 0.72 and navy_blue
+                  else 'FAIL_INVISIBLE_SHIRT',
+        'torso_to_face_luminance': round(relative,4),
+        'torso_blue_over_red': round(float(torso_rgb[2]) / max(float(torso_rgb[0]),1e-5),4),
+    }
+
+
+def verify_rendered_preview_wardrobe(render_path):
+    """Load a *rendered* PNG through Blender and check the visible shirt.
+
+    Samples the forehead and lower torso in the controlled portrait preset.
+    The still remains on disk for debugging when the test fails.
+    """
+    import bpy
+    image = bpy.data.images.load(str(Path(render_path).resolve()), check_existing=False)
+    try:
+        width,height = image.size
+        if width < 128 or height < 128:
+            raise RuntimeError('Studio preview too small to verify shirt contrast')
+        pixels = image.pixels
+        def center_patch(nx, ny):
+            # Blender image pixel origin is lower left; the UI image origin
+            # is upper left. Average a 5x5 patch to avoid compression noise.
+            x = int(nx * (width-1))
+            y = int((1-ny) * (height-1))
+            sums = [0.0, 0.0, 0.0]
+            for dy in range(-2,3):
+                for dx in range(-2,3):
+                    ix = max(0,min(width-1,x+dx))
+                    iy = max(0,min(height-1,y+dy))
+                    off = (iy*width+ix)*4
+                    for ch in range(3):
+                        sums[ch] += float(pixels[off+ch])
+            return tuple(s / 25 for s in sums)
+        check = assess_preview_wardrobe(center_patch(0.5,0.36),center_patch(0.5,0.84))
+    finally:
+        bpy.data.images.remove(image)
+    print('[Livynth] Rendered wardrobe pixel QA: ' + json.dumps(check,sort_keys=True))
+    if check['status'] != 'PASS_VISIBLE_NAVY_SHIRT':
+        raise RuntimeError('Studio preview shirt invisible in rendered pixels; '
+                           'inspect saved PNG, not only polygon material counts')
+    return check
 
 
 def set_test_pose(meshes, weights):
@@ -229,6 +300,8 @@ def render_preview_set(scene, meshes, out):
         file = out.with_name(out.stem+'_'+name+'.png')
         scene.render.filepath = str(file.resolve())
         bpy.ops.render.render(write_still=True)
+        if name == 'neutral':
+            verify_rendered_preview_wardrobe(file)
         print(f'[Livynth] Rendered diagnostic {name}: {file}')
 
 
@@ -363,6 +436,8 @@ def main(args):
         scene.render.image_settings.file_format='PNG'
         scene.render.filepath=str(args.out.with_suffix('.png').resolve())
         bpy.ops.render.render(write_still=True)
+        if args.preset == 'studio':
+            verify_rendered_preview_wardrobe(scene.render.filepath)
     else:
         include_narration(scene,args.audio)
         scene.render.image_settings.file_format='FFMPEG'
