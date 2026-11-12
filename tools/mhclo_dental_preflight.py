@@ -146,14 +146,20 @@ def diagnose_mixed_jaw_faces(mappings, faces, *, sample_limit=8):
     mixed_count = 0
     cross_jaw_vertices = set()
     samples = []
+    removed_face_indices = []
+    retained_faces = []
+    original_used = set()
     for face_index, face in enumerate(faces):
         try:
             labels = [ownership[index] for index in face]
         except (KeyError, TypeError) as exc:
             raise DentalPreflightError('E_MIXED_FACE_DIAGNOSTIC_FACE_INDEX') from exc
+        original_used.update(face)
         if len(set(labels)) <= 1:
+            retained_faces.append(face)
             continue
         mixed_count += 1
+        removed_face_indices.append(face_index)
         cross_jaw_vertices.update(face)
         if len(samples) < sample_limit:
             samples.append({
@@ -165,11 +171,64 @@ def diagnose_mixed_jaw_faces(mappings, faces, *, sample_limit=8):
                     'weights': [float(w) for w in mappings[index]['weights']],
                 } for index, label in zip(face, labels)],
             })
+    # A dry-run ONLY: never mutate the source OBJ or permit mixed-jaw
+    # production morphs. Measure the risk of removing cross-jaw bridge faces
+    # on a future disposable Blender teeth COPY.
+    retained_used = {v for face in retained_faces for v in face}
+    orphaned = original_used - retained_used
+
+    def connectivity(polygon_list):
+        parent = {}
+        def root(i):
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+        def union(a,b):
+            ra,rb = root(a),root(b)
+            if ra != rb:
+                parent[rb] = ra
+        edge_uses = {}
+        for face in polygon_list:
+            for v in face:
+                parent.setdefault(v,v)
+            for a,b in zip(face,face[1:] + face[:1]):
+                union(a,b)
+                edge = tuple(sorted((a,b)))
+                edge_uses[edge] = edge_uses.get(edge,0)+1
+        return {
+            'connected_vertex_components':len({root(v) for v in parent}),
+            'boundary_edges':sum(n==1 for n in edge_uses.values()),
+            'nonmanifold_edges':sum(n>2 for n in edge_uses.values()),
+        }
+
+    original_topology = connectivity(faces)
+    retained_topology = connectivity(retained_faces)
+    upper_faces = sum(ownership[face[0]]=='upper' for face in retained_faces)
+    lower_faces = len(retained_faces)-upper_faces
     return {
         'mixed_face_count': mixed_count,
         'mixed_face_unique_vertices': len(cross_jaw_vertices),
         'face_count': len(faces),
         'sample_limit': sample_limit,
+        'seam_cut_dry_run': {
+            'original_faces':len(faces),
+            'bridge_faces_to_exclude':mixed_count,
+            'bridge_face_indices_preview':removed_face_indices[:32],
+            'remaining_faces':len(retained_faces),
+            'removed_face_fraction':round(mixed_count/len(faces),6) if faces else 0.0,
+            'remaining_upper_faces':upper_faces,
+            'remaining_lower_faces':lower_faces,
+            'all_remaining_faces_single_jaw':True,
+            'newly_unused_vertices':len(orphaned),
+            'newly_unused_vertex_indices_preview':sorted(orphaned)[:16],
+            'before':original_topology,
+            'after':retained_topology,
+            'source_mesh_changed':False,
+            'copied_mesh_changed':False,
+            'visual_quality':'NOT_TESTED',
+            'production_status':'STILL_FAIL_PENDING_ISOLATED_EXPERIMENT',
+        },
         'samples': samples,
         'production_classifier_bypassed': False,
         'visual_quality': 'NOT_TESTED',
