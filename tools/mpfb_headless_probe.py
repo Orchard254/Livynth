@@ -302,12 +302,16 @@ def main() -> int:
     step("bake_modifiers_remove_helpers", _bake_mods)
 
     if identity_recipe and not report["errors"] and new_bm is not None:
-        from character.identity_recipe import neutral_positions_sha256
+        from character.identity_recipe import (
+            neutral_positions_sha256, neutral_topology_sha256)
         baked = new_bm.data.vertices
+        quads = new_bm.data.polygons
         report["neutral_identity_geometry"] = {
             "vertex_count": len(baked),
+            "quad_count": len(quads),
             "positions_sha256": neutral_positions_sha256(v.co for v in baked),
-            "fingerprint_basis": "baked-native-vertex-order-float64-le-before-arkit",
+            "topology_sha256": neutral_topology_sha256(p.vertices for p in quads),
+            "fingerprint_basis": "baked-native-indices-before-arkit",
         }
 
     # ---- OPTIONAL Stage-1 geometric fit, BEFORE facial targets ----------
