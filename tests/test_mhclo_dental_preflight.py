@@ -79,15 +79,54 @@ class PreflightRunnerTests(unittest.TestCase):
         self.assertEqual(argv[0],'blender.exe')
         self.assertIn('mpfb_dental_preflight_blender.py',' '.join(argv))
         self.assertNotIn('mpfb_anatomy_ab_blender.py',' '.join(argv))
-    def test_verified_preflight_report_passes(self):
+    @staticmethod
+    def pass_report():
+        return {
+            'schema':SCHEMA,
+            'status':'PASS_REAL_MHCLO_JAW_GROUP_MAPPING_NOT_VISUAL_QA',
+            'human_created':False,'glbs_touched':False,
+            'obj_vertices':100,'mhclo_entries':100,
+            'jaw_assignment':{
+                'status':'PASS_HELPER_GROUP_JAW_MAPPING_NOT_VISUAL_APPROVAL',
+                'total_teeth_vertices':100,
+                'upper_teeth_vertices':50,'lower_teeth_vertices':50,
+                'mixed_jaw_faces':0,'mesh_topology_modified':False,
+            },
+        }
+
+    def run_fake_pass(self, report):
         class Status: returncode=0
         def fake(*args,**kwargs):
-            self.out.write_text(json.dumps({
-              'schema':SCHEMA,'status':'PASS_REAL_MHCLO_JAW_GROUP_MAPPING_NOT_VISUAL_QA',
-              'human_created':False,'glbs_touched':False}))
+            self.out.write_text(json.dumps(report))
             return Status()
-        report=run('blender.exe',self.plan,self.out,execute=fake)
+        return run('blender.exe',self.plan,self.out,execute=fake)
+
+    def test_verified_preflight_report_passes(self):
+        report=self.run_fake_pass(self.pass_report())
         self.assertTrue(report['status'].startswith('PASS_'))
+        self.assertEqual(report['jaw_assignment']['upper_teeth_vertices'],50)
+
+    def test_pass_without_jaw_counts_rejected_before_cli_access(self):
+        report=self.pass_report()
+        del report['jaw_assignment']
+        with self.assertRaisesRegex(RuntimeError,'E_PREFLIGHT_REPORT_INVALID_PASS_MAPPING'):
+            self.run_fake_pass(report)
+
+    def test_pass_with_inconsistent_jaw_total_rejected(self):
+        report=self.pass_report()
+        report['jaw_assignment']['lower_teeth_vertices']=49
+        with self.assertRaisesRegex(RuntimeError,'E_PREFLIGHT_REPORT_INVALID_PASS_MAPPING'):
+            self.run_fake_pass(report)
+
+    def test_pass_with_cross_jaw_faces_rejected(self):
+        report=self.pass_report()
+        report['jaw_assignment']['mixed_jaw_faces']=1
+        with self.assertRaisesRegex(RuntimeError,'E_PREFLIGHT_REPORT_INVALID_PASS_MAPPING'):
+            self.run_fake_pass(report)
+
+    def test_malformed_nonobject_json_rejected(self):
+        with self.assertRaisesRegex(RuntimeError,'E_PREFLIGHT_REPORT_INVALID'):
+            self.run_fake_pass([])
     def test_failed_real_asset_still_preserves_diagnostic_json(self):
         class Status: returncode=3
         def fake(*args,**kwargs):

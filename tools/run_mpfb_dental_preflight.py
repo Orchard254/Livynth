@@ -30,13 +30,27 @@ def run(blender,plan,out,*,execute=subprocess.run):
     if not output.is_file():
         raise RuntimeError('E_PREFLIGHT_REPORT_MISSING: Blender exit '+str(completed.returncode))
     data=json.loads(output.read_text(encoding='utf-8'))
-    if (data.get('schema')!=SCHEMA or
+    if (not isinstance(data,dict) or data.get('schema')!=SCHEMA or
         data.get('status') not in (
            'PASS_REAL_MHCLO_JAW_GROUP_MAPPING_NOT_VISUAL_QA',
            'FAIL_REAL_MHCLO_JAW_GROUP_MAPPING') or
         data.get('human_created') is not False or
         data.get('glbs_touched') is not False):
         raise RuntimeError('E_PREFLIGHT_REPORT_INVALID')
+    if data['status'].startswith('PASS_'):
+        jaw=data.get('jaw_assignment')
+        count=data.get('obj_vertices')
+        if (not isinstance(jaw,dict) or type(count) is not int or count<32 or
+            data.get('mhclo_entries')!=count or
+            jaw.get('status')!='PASS_HELPER_GROUP_JAW_MAPPING_NOT_VISUAL_APPROVAL' or
+            jaw.get('total_teeth_vertices')!=count or
+            type(jaw.get('lower_teeth_vertices')) is not int or
+            type(jaw.get('upper_teeth_vertices')) is not int or
+            jaw['lower_teeth_vertices']<20 or jaw['upper_teeth_vertices']<20 or
+            jaw['lower_teeth_vertices']+jaw['upper_teeth_vertices']!=count or
+            jaw.get('mixed_jaw_faces')!=0 or
+            jaw.get('mesh_topology_modified') is not False):
+            raise RuntimeError('E_PREFLIGHT_REPORT_INVALID_PASS_MAPPING')
     if completed.returncode!=0 or data['status'].startswith('FAIL_'):
         raise RuntimeError('E_PREFLIGHT_REJECTED: '+str(data.get('first_error'))+
                            '; details in '+str(output))
