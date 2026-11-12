@@ -103,3 +103,74 @@ def inspect_mhclo_weights(mappings, *, sample_limit=5):
         'source_assets_modified':False,
         'user_files_included':False,
     }
+
+
+def diagnose_mixed_jaw_faces(mappings, faces, *, sample_limit=8):
+    """Describe cross-jaw polygon boundaries; NEVER override strict classification.
+
+    Called only after the production classifier rejects a mixed-jaw face.
+    Vertex ownership follows the identical pinned helper ranges and 99.9%
+    absolute-weight contribution threshold. Output is evidence, not approval.
+    """
+    from character.mhclo_dentition import LOWER_HELPER, UPPER_HELPER
+
+    if (not isinstance(mappings, dict) or not isinstance(faces, (tuple, list))
+            or type(sample_limit) is not int or not 1 <= sample_limit <= 32):
+        raise DentalPreflightError('E_MIXED_FACE_DIAGNOSTIC_INPUT')
+
+    ownership = {}
+    for index, entry in mappings.items():
+        try:
+            refs = entry['verts']
+            coeff = entry['weights']
+            if len(refs) != 3 or len(coeff) != 3:
+                raise ValueError('wrong source tuple')
+            values = [float(w) for w in coeff]
+            total = sum(abs(w) for w in values)
+            if not all(math.isfinite(w) for w in values) or not 1e-10 < total <= 100:
+                raise ValueError('invalid weights')
+            lower = sum(abs(w) for ref, w in zip(refs, values)
+                        if LOWER_HELPER[0] <= ref <= LOWER_HELPER[1]) / total
+            upper = sum(abs(w) for ref, w in zip(refs, values)
+                        if UPPER_HELPER[0] <= ref <= UPPER_HELPER[1]) / total
+            if lower >= .999 and upper <= .001:
+                ownership[index] = 'lower'
+            elif upper >= .999 and lower <= .001:
+                ownership[index] = 'upper'
+            else:
+                raise ValueError('ambiguous source references')
+        except (ValueError, TypeError, KeyError, IndexError) as exc:
+            raise DentalPreflightError(
+                'E_MIXED_FACE_DIAGNOSTIC_JAW_VERTEX: ' + str(index)) from exc
+
+    mixed_count = 0
+    cross_jaw_vertices = set()
+    samples = []
+    for face_index, face in enumerate(faces):
+        try:
+            labels = [ownership[index] for index in face]
+        except (KeyError, TypeError) as exc:
+            raise DentalPreflightError('E_MIXED_FACE_DIAGNOSTIC_FACE_INDEX') from exc
+        if len(set(labels)) <= 1:
+            continue
+        mixed_count += 1
+        cross_jaw_vertices.update(face)
+        if len(samples) < sample_limit:
+            samples.append({
+                'face_index': face_index,
+                'vertices': [{
+                    'index': index,
+                    'jaw': label,
+                    'refs': list(mappings[index]['verts']),
+                    'weights': [float(w) for w in mappings[index]['weights']],
+                } for index, label in zip(face, labels)],
+            })
+    return {
+        'mixed_face_count': mixed_count,
+        'mixed_face_unique_vertices': len(cross_jaw_vertices),
+        'face_count': len(faces),
+        'sample_limit': sample_limit,
+        'samples': samples,
+        'production_classifier_bypassed': False,
+        'visual_quality': 'NOT_TESTED',
+    }
