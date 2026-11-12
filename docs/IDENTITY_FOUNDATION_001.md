@@ -18,6 +18,20 @@ One MPFB base topology and one rig/morph system should generate **different manu
 6. `tests/test_identity_recipe.py`: strict validation + positive/negative structural controls and exporter argument tests.
 7. Studio CLI and GUI accept an **optional identity recipe JSON** when creating a character. This is mutually exclusive with an existing GLB; all baseline behavior without a recipe remains unchanged.
 
+## One-command A/B test (recommended)
+
+The Windows workstation with Blender 4.5.10 and MPFB installed can run the whole build-and-compare gate from the LIVYNTH repository root:
+
+```powershell
+git pull --ff-only
+python tools/local_check.py
+python tools/run_identity_ab.py
+```
+
+The script discovers Blender using the existing Studio helper, creates a new timestamped `output/identity_ab/YYYYMMDD_HHMMSS_microseconds` folder, exports both demonstration characters (separate GLB and audit JSON files), and runs the **strict topology/shape/skin/67-morph/163-joint comparator**. It refuses to overwrite an existing run folder and stops on the first failing export. On success, inspect `identity_comparison.json`; the report is **not** a visual likeness or animation-quality verdict. Upload its JSON report and, for real visual inspection, representative character stills before advancing to image fitting.
+
+Run separate manual commands below only to debug a failing stage. No need for full MP4 rendering.
+
 ## Windows acceptance commands
 
 From the repo checkout on the **development branch** (after merge):
