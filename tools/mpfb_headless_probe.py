@@ -303,6 +303,37 @@ def main() -> int:
             remove_helpers=True, also_proxy=True)
     step("bake_modifiers_remove_helpers", _bake_mods)
 
+    # Detailed identity shape: same native quad connectivity, adjusted vertex
+    # positions before ARKit/Meta keys are constructed.  This is opt-in v2
+    # and never changes the existing no-recipe Stage-0 baseline.
+    if identity_recipe and loaded.get("head_shape") and not report["errors"]:
+        def _head_shape():
+            import numpy as np
+            from character.head_shape import apply_head_shape
+            from character.identity_recipe import neutral_positions_sha256
+            source = np.asarray([tuple(v.co) for v in new_bm.data.vertices],
+                                dtype=np.float64)
+            quads = np.asarray([tuple(poly.vertices)
+                                for poly in new_bm.data.polygons],dtype=np.int64)
+            transformed, shape_audit = apply_head_shape(
+                source,quads,loaded["head_shape"])
+            shape_audit["source_positions_sha256"] = neutral_positions_sha256(source)
+            shape_audit["output_positions_sha256"] = neutral_positions_sha256(transformed)
+            for vertex, position in zip(new_bm.data.vertices, transformed):
+                vertex.co = tuple(float(v) for v in position)
+            new_bm.data.update()
+            report["identity_head_shape"] = shape_audit
+        step("identity_head_shape", _head_shape)
+        if report["errors"]:
+            report["fatal"] = "Identity head fit rejected; GLB not exported"
+            text = json.dumps(report, indent=2)
+            print(text)
+            if out_json:
+                os.makedirs(os.path.dirname(os.path.abspath(out_json)), exist_ok=True)
+                with open(out_json,"w",encoding="utf-8") as fh:
+                    fh.write(text)
+            return 2
+
     if identity_recipe and not report["errors"] and new_bm is not None:
         from character.identity_recipe import (
             neutral_positions_sha256, neutral_topology_sha256)
