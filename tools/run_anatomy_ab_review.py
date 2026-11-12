@@ -34,7 +34,7 @@ class AnatomyABError(ValueError):
     pass
 
 
-def plan(blender,asset_plan,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False):
+def plan(blender,asset_plan,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False,mhclo_dentition=False):
     load_plan(asset_plan)
     output=Path(output).resolve()
     return [(char,[
@@ -44,11 +44,12 @@ def plan(blender,asset_plan,output,*,align_accessories=False,audit_oral_motion=F
         '--out',str((output/char).resolve())]+(
         ['--align-accessories'] if align_accessories else [])+(
         ['--audit-oral-motion'] if audit_oral_motion else [])+(
-        ['--oral-correctives'] if oral_correctives else []))
+        ['--oral-correctives'] if oral_correctives else [])+(
+        ['--mhclo-dentition'] if mhclo_dentition else []))
         for char in CHARACTERS]
 
 
-def validate_character(report,folder,character,*,expect_alignment=False,expect_oral_motion=False,expect_oral_correctives=False):
+def validate_character(report,folder,character,*,expect_alignment=False,expect_oral_motion=False,expect_oral_correctives=False,expect_dentition=False):
     if (not isinstance(report,dict) or report.get('schema')!=SCHEMA or
         report.get('status')!='CAPTURED_ANATOMY_AB_REQUIRES_VISUAL_REVIEW' or
         report.get('character_id')!=character or
@@ -122,6 +123,27 @@ def validate_character(report,folder,character,*,expect_alignment=False,expect_o
                     raise AnatomyABError('E_ORAL_CORRECTIVE_'+category+'_'+pose)
         if not expect_oral_motion:
             raise AnatomyABError('E_ORAL_CORRECTIVE_REQUIRES_MOTION_QA')
+    if expect_dentition:
+        mapping=report.get('dental_mapping_audit')
+        if (not expect_oral_correctives or
+            report.get('dental_segmentation_mode')!='MHCLO_HM08_UPPER_LOWER_HELPERS' or
+            not isinstance(mapping,dict) or
+            mapping.get('schema')!='livynth.mhclo-dentition.v1' or
+            mapping.get('status')!='PASS_HELPER_GROUP_JAW_MAPPING_NOT_VISUAL_APPROVAL' or
+            mapping.get('lower_teeth_vertices',0)<20 or
+            mapping.get('upper_teeth_vertices',0)<20 or
+            mapping.get('mixed_jaw_faces')!=0 or
+            mapping.get('source_vertex_count')!=19158 or
+            mapping.get('total_teeth_vertices')!=3868 or
+            len(mapping.get('lower_mask_sha256',''))!=64):
+            raise AnatomyABError('E_MHCLO_DENTITION_AUDIT_'+character)
+        for pose in ('jaw_open','viseme_aa'):
+            values=report['oral_corrective_audit'][pose]
+            if (values.get('dentition_mapping')!=mapping or
+                values['teeth'].get('dentition_segmentation')!='MHCLO_UPPER_LOWER_HELPER_GROUPS' or
+                values['teeth'].get('moved_vertices_gt_0_1_mm')!=mapping['lower_teeth_vertices'] or
+                values['teeth'].get('stationary_vertices_lt_0_1_mm')!=mapping['upper_teeth_vertices']):
+                raise AnatomyABError('E_MHCLO_JAW_MOVEMENT_MISMATCH_'+pose)
     assets=report.get('assets')
     if (not isinstance(assets,list) or
         [a.get('category') for a in assets]!=list(REQUIRED) or
@@ -177,12 +199,15 @@ def _gallery():
     return ''.join(blocks)
 
 
-def run(blender,asset_plan,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False,execute=subprocess.run):
+def run(blender,asset_plan,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False,mhclo_dentition=False,execute=subprocess.run):
     if oral_correctives and not (align_accessories and audit_oral_motion):
         raise AnatomyABError('E_ORAL_CORRECTIVES_REQUIRE_ALIGNMENT_AND_AUDIT')
+    if mhclo_dentition and not oral_correctives:
+        raise AnatomyABError('E_MHCLO_DENTITION_REQUIRES_CORRECTIVES')
     output=Path(output).resolve()
     jobs=plan(blender,asset_plan,output,align_accessories=align_accessories,
-              audit_oral_motion=audit_oral_motion,oral_correctives=oral_correctives)
+              audit_oral_motion=audit_oral_motion,oral_correctives=oral_correctives,
+              mhclo_dentition=mhclo_dentition)
     if output.exists() or output.is_symlink():
         raise FileExistsError('E_ANATOMY_AB_OUTPUT_EXISTS')
     output.parent.mkdir(parents=True,exist_ok=True)
@@ -196,7 +221,8 @@ def run(blender,asset_plan,output,*,align_accessories=False,audit_oral_motion=Fa
         report['_validated_folder']=str(where)
         validate_character(report,where,character,expect_alignment=align_accessories,
                            expect_oral_motion=audit_oral_motion,
-                           expect_oral_correctives=oral_correctives)
+                           expect_oral_correctives=oral_correctives,
+                           expect_dentition=mhclo_dentition)
         reports.append(report)
     final=compare_reports(*reports)
     final['anatomy_alignment_mode']=(
@@ -205,6 +231,17 @@ def run(blender,asset_plan,output,*,align_accessories=False,audit_oral_motion=Fa
     final['oral_corrective_mode']=(
         'MORPH_LINKED_LOWER_TEETH_AND_TONGUE' if oral_correctives else 'OFF')
     final['oral_corrective_visual_quality']='PENDING_INDEPENDENT_REVIEW'
+    if mhclo_dentition:
+        mapping_a=reports[0]['dental_mapping_audit']
+        mapping_b=reports[1]['dental_mapping_audit']
+        if mapping_a['lower_mask_sha256']!=mapping_b['lower_mask_sha256']:
+            raise AnatomyABError('E_MHCLO_AB_DENTAL_MAPPING_DIFFERENCE')
+        final['dental_segmentation_mode']='MHCLO_HM08_UPPER_LOWER_HELPERS'
+        final['upper_lower_teeth_counts']={
+            'upper':mapping_a['upper_teeth_vertices'],
+            'lower':mapping_a['lower_teeth_vertices']}
+        final['dental_helper_mapping_sha256']=mapping_a['lower_mask_sha256']
+        final['dental_pose_appearance']='PENDING_INDEPENDENT_VISUAL_QA'
     if audit_oral_motion:
         final['oral_motion_diagnostic']={
             name:report['oral_motion_audit'] for name,report in zip(CHARACTERS,reports)}
@@ -244,6 +281,8 @@ def main(argv=None):
     parser.add_argument('--plan',type=Path,
                         default=ROOT/'character/appearance/native_anatomy_demo.json')
     parser.add_argument('--out',type=Path)
+    parser.add_argument('--mhclo-dentition',action='store_true',
+                        help='Rigid upper/lower teeth assignment from verified native MPFB MHCLO')
     parser.add_argument('--oral-correctives',action='store_true',
                         help='Opt-in source-jaw-derived lower-teeth/tongue morphs')
     parser.add_argument('--audit-oral-motion',action='store_true',
@@ -257,7 +296,8 @@ def main(argv=None):
         result,archive=run(find_blender(args.blender),args.plan,output,
                            align_accessories=args.align_accessories,
                            audit_oral_motion=args.audit_oral_motion,
-                           oral_correctives=args.oral_correctives)
+                           oral_correctives=args.oral_correctives,
+                           mhclo_dentition=args.mhclo_dentition)
     except (OSError,ValueError,RuntimeError,subprocess.CalledProcessError) as exc:
         parser.exit(2,'LIVYNTH IDENTITY-011 FAILED: '+str(exc)+
                     '\nPartial evidence: '+str(output)+'\n')
