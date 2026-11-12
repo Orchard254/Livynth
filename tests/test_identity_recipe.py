@@ -116,6 +116,42 @@ class ComparisonTests(unittest.TestCase):
         b['glb_audit']['target_names']=['other']
         with self.assertRaisesRegex(IdentityComparisonError,'E_MORPH_NAME_MISMATCH'):
             compare(a,b)
+    def test_head_shape_audit_same_source_accepted(self):
+        a=sample('a','recipeA','outA')
+        b=sample('b','recipeB','outB')
+        for candidate in (a,b):
+            audit={
+                'status':'PASS_LOCAL_QUADS_NOT_GLOBAL_INTERSECTIONS',
+                'min_triangle_area_ratio':0.61,
+                'max_displacement_m':0.010,
+                'moved_vertices_gt_0_1_mm':3500,
+                'source_positions_sha256':'verified-neutral-sha',
+                'output_positions_sha256':candidate['neutral_identity_geometry']['positions_sha256'],
+            }
+            candidate['identity_head_shape']=audit
+        self.assertIn('PASS_DISTINCT',compare(a,b)['status'])
+
+    def test_head_shape_audit_rejects_different_source(self):
+        a=sample('a','recipeA','outA')
+        b=sample('b','recipeB','outB')
+        for candidate,source_sha in ((a,'baseA'),(b,'baseB')):
+            candidate['identity_head_shape']={
+                'status':'PASS_LOCAL_QUADS_NOT_GLOBAL_INTERSECTIONS',
+                'min_triangle_area_ratio':0.6,'max_displacement_m':0.01,
+                'moved_vertices_gt_0_1_mm':3500,
+                'source_positions_sha256':source_sha,
+                'output_positions_sha256':candidate['neutral_identity_geometry']['positions_sha256'],
+            }
+        with self.assertRaisesRegex(IdentityComparisonError,'E_HEAD_SOURCE_DIFFERENT'):
+            compare(a,b)
+
+    def test_head_shape_missing_second_audit_rejected(self):
+        a=sample('a','recipeA','outA')
+        b=sample('b','recipeB','outB')
+        a['identity_head_shape']={'status':'PASS_LOCAL_QUADS_NOT_GLOBAL_INTERSECTIONS'}
+        with self.assertRaisesRegex(IdentityComparisonError,'E_HEAD_SHAPE_AUDIT_MISSING'):
+            compare(a,b)
+
     def test_failed_export_fails(self):
         a=sample('a','a','one');a['assertions_passed']=False
         with self.assertRaisesRegex(IdentityComparisonError,'E_EXPORT_AUDIT'):
