@@ -14,10 +14,11 @@ def inspect_assets(out):
     from bl_ext.user_default.mpfb.services import AssetService
     from bl_ext.user_default import mpfb
     roots={category: AssetService.get_asset_roots(category) for category in CATEGORIES}
-    installed=AssetService.system_assets_pack_is_installed()
+    pack_check=getattr(AssetService, 'system_assets_pack_is_installed', None)
+    installed=pack_check() if callable(pack_check) else None
     result=make_inventory(roots,mpfb_version=getattr(mpfb,'__version__','build_unreported'),
                           blender_version=bpy.app.version_string,
-                          system_assets_pack_installed=bool(installed))
+                          system_assets_pack_installed=(bool(installed) if installed is not None else None))
     out=Path(out)
     if out.exists() or out.is_symlink():
         raise FileExistsError('Refusing to overwrite asset inventory: '+str(out))
