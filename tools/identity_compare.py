@@ -15,14 +15,23 @@ def compare(a, b):
         if identity.get('source')!='manual_parameters' or not identity.get('sha256'):
             raise IdentityComparisonError('E_RECIPE_MISSING_'+label)
         geo=report.get('neutral_identity_geometry') or {}
-        if not geo.get('positions_sha256') or geo.get('vertex_count',0)<4:
+        if not geo.get('positions_sha256') or not geo.get('topology_sha256') or geo.get('vertex_count',0)<4 or geo.get('quad_count',0)<4:
             raise IdentityComparisonError('E_GEOMETRY_MISSING_'+label)
         audit=report.get('glb_audit') or {}
         if (audit.get('joint_count'),audit.get('morph_targets_in_exported_glb'))!=(163,67) or not audit.get('skin_present'):
             raise IdentityComparisonError('E_RIG_MORPH_'+label)
     ga,gb=a['neutral_identity_geometry'],b['neutral_identity_geometry']
-    if ga['vertex_count']!=gb['vertex_count']:
+    if (ga['vertex_count'],ga['quad_count'],ga['topology_sha256']) != (gb['vertex_count'],gb['quad_count'],gb['topology_sha256']):
         raise IdentityComparisonError('E_DIFFERENT_TOPOLOGY')
+    aa,bb=a['glb_audit'],b['glb_audit']
+    if not aa.get('target_names') or aa['target_names']!=bb.get('target_names'):
+        raise IdentityComparisonError('E_MORPH_NAME_MISMATCH')
+    if not aa.get('skin_joint_names') or aa['skin_joint_names']!=bb.get('skin_joint_names'):
+        raise IdentityComparisonError('E_JOINT_NAME_MISMATCH')
+    if not all(p.get('has_uv') for audit in (aa,bb) for p in audit.get('character_primitives',[])):
+        raise IdentityComparisonError('E_UV_MISSING')
+    if not aa.get('character_primitives') or not bb.get('character_primitives'):
+        raise IdentityComparisonError('E_PRIMITIVES_MISSING')
     if ga['positions_sha256']==gb['positions_sha256']:
         raise IdentityComparisonError('E_IDENTICAL_GEOMETRY')
     if a['identity_recipe']['sha256']==b['identity_recipe']['sha256']:
