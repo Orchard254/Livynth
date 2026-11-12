@@ -123,7 +123,7 @@ def _audit_jaw_and_visemes(body,assets,*,use_oral_correctives=False):
     return reports
 
 
-def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False,mhclo_dentition=False,rigged_seam_probe=False,seam_jaw_stills=False,oral_isolation=False):
+def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False,mhclo_dentition=False,rigged_seam_probe=False,seam_jaw_stills=False,oral_isolation=False,dental_arch_isolation=False):
     import bpy
     import numpy as np
     from bl_ext.user_default.mpfb.services import (
@@ -144,6 +144,9 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
         raise ValueError('E_ID022_REQUIRES_HEAD_A_AND_VERIFIED_ORAL_PIPELINE')
     if oral_isolation and not seam_jaw_stills:
         raise ValueError('E_ID023_VISIBILITY_REQUIRES_SEAM_JAW_STILLS')
+    if dental_arch_isolation and (
+            not seam_jaw_stills or oral_isolation):
+        raise ValueError('E_ID024_ARCH_VISIBILITY_REQUIRES_EXCLUSIVE_SEAM_JAW_STILLS')
     output=Path(output).resolve()
     if output.exists() or output.is_symlink():
         raise FileExistsError('E_ANATOMY_POSE_OUTPUT_EXISTS')
@@ -399,7 +402,67 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
         raise RuntimeError('E_ID022_ORAL_MOTION_BEFORE_RENDER')
     images=[]
     oral_visibility_audit=None
-    if oral_isolation:
+    dental_arch_location_audit=None
+    dental_arch_render_audit=None
+    if dental_arch_isolation:
+        from character.seamed_jaw_motion import PASS as SEAM_PASS
+        from tools.mhclo_arch_attribution import (
+            isolated_arch_objects,arch_location_audit)
+        _set_morphs(body,POSES['jaw_open'],oral_assets=controlled)
+        evaluated_assets=_evaluated_world_vertices({
+            'teeth':actual_assets['teeth'],
+            'tongue':actual_assets['tongue']})
+        dental_arch_location_audit=arch_location_audit(
+            evaluated_assets['teeth'],evaluated_assets['tongue'],dental_mask)
+        teeth=actual_assets['teeth']
+        tongue=actual_assets['tongue']
+        archived_body_hide=body.hide_render
+        archived_teeth_hide=teeth.hide_render
+        archived_tongue_hide=tongue.hide_render
+        try:
+            with isolated_arch_objects(teeth,dental_mask) as arch:
+                upper,lower=arch['upper'],arch['lower']
+                teeth.hide_render=True
+                tongue.hide_render=True
+                views=(
+                    ('jaw_upper_only',True,False,True),
+                    ('jaw_lower_only',False,True,True),
+                    ('jaw_both_arches',True,True,True),
+                    ('jaw_lower_no_body',False,True,False),
+                )
+                audit_rows=[]
+                for name,upper_visible,lower_visible,body_visible in views:
+                    upper.hide_render=not upper_visible
+                    lower.hide_render=not lower_visible
+                    body.hide_render=not body_visible
+                    bpy.context.view_layer.update()
+                    images.append(_render(
+                        scene,body,name,0,output,oral_closeup=True))
+                    audit_rows.append({
+                        'filename':name+'.png',
+                        'upper_arch_visible':upper_visible,
+                        'lower_arch_visible':lower_visible,
+                        'body_visible':body_visible,
+                        'tongue_visible':False,
+                        'original_rigged_teeth_visible':False,
+                        'source_assets_modified':False,
+                        'visual_approval':'PENDING',
+                    })
+                dental_arch_render_audit={
+                    'schema':'livynth.mhclo.arch-attribution.v1',
+                    'source_face_count':arch['source_face_count'],
+                    'upper_face_count':arch['upper_face_count'],
+                    'lower_face_count':arch['lower_face_count'],
+                    'rendered_variants':audit_rows,
+                    'temporary_evaluated_arch_objects_removed_on_exit':True,
+                    'photorealism':'NOT_TESTED',
+                }
+        finally:
+            body.hide_render=archived_body_hide
+            teeth.hide_render=archived_teeth_hide
+            tongue.hide_render=archived_tongue_hide
+            bpy.context.view_layer.update()
+    elif oral_isolation:
         from tools.oral_asset_visibility import capture_oral_visibility
         _set_morphs(body,POSES['jaw_open'],oral_assets=controlled)
         images,oral_visibility_audit=capture_oral_visibility(
@@ -420,7 +483,9 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
         images.append(_render(scene,body,'three_quarter_jaw_open',38,output))
     report={
         'schema':SCHEMA,'character_id':character,
-        'status':('CAPTURED_HEAD_A_ORAL_ISOLATION_PENDING_VISUAL_REVIEW'
+        'status':('CAPTURED_HEAD_A_DENTAL_ARCH_ISOLATION_PENDING_VISUAL_REVIEW'
+                  if dental_arch_isolation else
+                  'CAPTURED_HEAD_A_ORAL_ISOLATION_PENDING_VISUAL_REVIEW'
                   if oral_isolation else
                   'CAPTURED_HEAD_A_SEAM_JAW_STILLS_PENDING_VISUAL_REVIEW'
                   if seam_jaw_stills else
@@ -447,6 +512,8 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
         'seamed_render_copy_audit':seam_copy_audit,
         'seamed_jaw_motion_audit':seam_jaw_motion_audit,
         'oral_asset_visibility_audit':oral_visibility_audit,
+        'dental_arch_location_audit':dental_arch_location_audit,
+        'dental_arch_render_audit':dental_arch_render_audit,
         'oral_motion_audit':oral_motion_audit,
         'oral_motion_status':('RECORDED_DO_NOT_INFER_VISUAL_APPROVAL'
                               if oral_motion_audit else 'NOT_RUN'),
@@ -461,7 +528,9 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
         'eyes_teeth_tongue_follow_expression':'PENDING_VISUAL_REVIEW',
         'natural_animation':'NOT_TESTED',
         'character_001_likeness':'NOT_TESTED',
-        'render_scope':('HEAD_A_JAW_OPEN_ORAL_ASSET_VISIBILITY_ONLY'
+        'render_scope':('HEAD_A_JAW_OPEN_DENTAL_ARCH_ATTRIBUTION_ONLY'
+                        if dental_arch_isolation else
+                        'HEAD_A_JAW_OPEN_ORAL_ASSET_VISIBILITY_ONLY'
                         if oral_isolation else
                         'HEAD_A_FRONT_NEUTRAL_AND_JAW_OPEN_ONLY'
                         if seam_jaw_stills else 'STANDARD_AB_POSES'),
@@ -490,6 +559,8 @@ if __name__=='__main__':
                         help='IDENTITY-022 opt-in Head A two front stills, cut only copied teeth')
     parser.add_argument('--oral-isolation',action='store_true',
                         help='IDENTITY-023 Head A jaw-open with teeth/tongue on-off comparison')
+    parser.add_argument('--dental-arch-isolation',action='store_true',
+                        help='IDENTITY-024 split evaluated upper/lower jaw arches for attribution')
     parser.add_argument('--mhclo-dentition',action='store_true',
                         help='Use original MPFB teeth helper mapping instead of visual Z split')
     parser.add_argument('--oral-correctives',action='store_true',
@@ -504,4 +575,5 @@ if __name__=='__main__':
         mhclo_dentition=args.mhclo_dentition,
         rigged_seam_probe=args.rigged_seam_probe,
         seam_jaw_stills=args.seam_jaw_stills,
-        oral_isolation=args.oral_isolation)
+        oral_isolation=args.oral_isolation,
+        dental_arch_isolation=args.dental_arch_isolation)
