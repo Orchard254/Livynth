@@ -9,8 +9,12 @@ import argparse
 import io
 import json
 from pathlib import Path
+import sys
 import zipfile
 import numpy as np
+ROOT=Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0,str(ROOT))
 from character.head_shape import apply_head_shape
 from character.identity_recipe import load_recipe,neutral_positions_sha256,neutral_topology_sha256
 
