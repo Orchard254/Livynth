@@ -201,6 +201,54 @@ python tools/package_identity_pose_review.py --folder output\identity_ab\2026111
 See docs/IDENTITY_REVIEW_PACK_008.md. Character 001 five-view likeness
 Phase-3 remains **FAIL**.
 
+## Independent 20-image two-character visual review (2026-11-12)
+
+Owner uploaded the 5,161,863-byte `20261112_060832_140286.zip`, containing
+20 original 400×600 PNGs, two Blender reports, the run summary, a gallery
+and SHA256 manifest. All 24 manifest entries independently matched their
+actual ZIP content hashes and sizes.
+
+**BASIC REUSABLE STATIC FACE POSES PASS**: both manually configured heads
+show closed eyelids on full blink, attached lips/chin in jaw-open and AA
+poses, distinct lip closure/pucker/smile, and broadly coherent neutral/blink
+and jaw-open three-quarter views. The A/B jaw silhouettes differ. The
+original 16/16 raster-signal checks therefore have visual support.
+**Human appearance FAIL**: eye openings lack finished eyeballs/irises/pupils;
+open oral cavity shows stippled interior without credible tongue/teeth;
+hair and photoreal skin are absent and torso lacks visibly separated navy
+garment. Natural temporal animation/lip-sync UNVERIFIED because only static
+poses were reviewed. Character 001 source-image likeness Phase-3 remains FAIL.
+
+See `docs/IDENTITY_VISUAL_REVIEW_008.md` for detailed evidence and
+the explicit presentation vs reusable-control decision. Source render ZIP
+and user reference photos remain outside the repository.
+
+## IDENTITY-009 — MPFB native fitted-anatomy asset availability (2026-11-12)
+
+Official MPFB supports fitted eyes, teeth, tongue, eyebrows/eyelashes,
+hair and clothing via its native MHClO asset system. Rather than invent
+unverified procedural eye spheres or hand-paint an oral opening, a new
+**read-only** Blender asset inventory identifies the installed bodypart
+files and whether the required eyes, teeth and tongue assets exist. It
+does not install assets, modify the characters, download weights, or claim
+that native assets are rigged into either GLB.
+
+One command on the existing Windows environment:
+`python tools/probe_mpfb_assets.py`
+
+The report records category availability, file hashes and relative paths
+(without absolute local asset directories). If assets are missing it
+reports MISSING_REQUIRED_ANATOMY_ASSETS; if present it reports
+ASSETS_AVAILABLE_FOR_FITTING_TESTS, not rendering quality PASS.
+**11/11 focused local pure-Python and simulated runner tests passed.**
+Actual MPFB installed-library probe on owner's Windows remains UNVERIFIED.
+
+**Next:** after the inventory identifies available assets, attach fitted
+eyes/teeth/tongue as an optional appearance layer, then repeat the A/B
+neutral/blink/jaw/AA/PP still checks. Preserve the 163-joint/67-morph
+base-contract and treat all asset licenses as review-before-commercial-use.
+Image-to-identity reconstruction remains a separate unsolved gate.
+
 ## Explicit next acceptance gates
 
 1. **Owner Windows integrated smoke**: open the Studio, inspect actual neutral PNG, render a 30-frame MP4 and confirm it visually plays with audible speech; save `studio_run.json` and Blender diagnostics. Fail any stage that is black, visually incorrect, silent, or crashes. Repeat with `--mode demo` before release.
