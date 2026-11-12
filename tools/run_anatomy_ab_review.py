@@ -87,7 +87,8 @@ def validate_character(report,folder,character,*,expect_alignment=False,expect_o
             raise AnatomyABError('E_MISSING_ORAL_MOTION_AUDIT_'+character)
         for pose,measurement in audit.items():
             stats=measurement.get('stats',{}) if isinstance(measurement,dict) else {}
-            if (measurement.get('schema')!=ORAL_SCHEMA or
+            if (not isinstance(measurement,dict) or
+                measurement.get('schema')!=ORAL_SCHEMA or
                 measurement.get('pose')!=pose or measurement.get('status') not in allowed or
                 set(stats)!={'body','teeth','tongue'} or
                 any(not isinstance(s,dict) or s.get('vertex_count',0)<4
