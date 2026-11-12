@@ -249,6 +249,47 @@ neutral/blink/jaw/AA/PP still checks. Preserve the 163-joint/67-morph
 base-contract and treat all asset licenses as review-before-commercial-use.
 Image-to-identity reconstruction remains a separate unsolved gate.
 
+## IDENTITY-009 owner-installed anatomy inventory: PASS (2026-11-12)
+
+Owner uploaded the real Blender 4.5.10 LTS `mpfb_asset_inventory.json`
+after the read-only probe. **ASSETS_AVAILABLE_FOR_FITTING_TESTS**,
+system_assets_pack_installed=true, no missing required eyes/teeth/tongue.
+Installed options: **2 eyes, 6 teeth, 1 tongue, 12 eyebrows,
+4 eyelashes, 10 hair, 20 clothing, 23 skin presets = 78 total**.
+
+The inventory reports **assets_fitted_to_body NOT_TESTED** and
+**exported_rig_compatibility NOT_TESTED**. It does NOT prove the
+eye, oral or garment surfaces actually work on either deformed GLB,
+and their asset licenses still require commercial-use review.
+
+## IDENTITY-010 — isolated native MPFB fitted-anatomy prototype
+
+Implemented a pinned, SHA256-verified selection of high-poly eyes,
+teeth_base and tongue01 based on owner's installed file inventory.
+New `tools/run_native_anatomy_probe.py` starts Blender with fresh
+disposable MPFB human + built-in rig, uses documented
+`HumanService.add_mhclo_asset`, checks the three real scene objects
+and saves 480x720 front and three-quarter PNG previews and an audit JSON.
+This does not modify existing A/B GLBs or the production renderer.
+
+**12 regression tests authored**, covering plan validation, real asset
+hash mismatch, path traversal, file absence, missing attached meshes,
+PNG corruption and overwrite controls. These tests and the new Blender
+probe have not yet been run against owner's Windows installation;
+do not claim fitting success until the output is reviewed.
+
+The probe intentionally uses the reference human's **broad MPFB macros**,
+not the six detailed head-shape coefficients. Passing this first gate
+would demonstrate installed asset integration only; attachment to both
+deformed identities, 163-joint/67-target GLB preservation, jaw movement
+and eye alignment are subsequent measured gates. Source documentation:
+`docs/IDENTITY_NATIVE_ANATOMY_010.md`.
+
+Next one-command Windows check:
+`python tools/run_native_anatomy_probe.py`
+after pulling the development branch. **Character 001 image-reconstruction
+Phase-3 remains FAIL.**
+
 ## Explicit next acceptance gates
 
 1. **Owner Windows integrated smoke**: open the Studio, inspect actual neutral PNG, render a 30-frame MP4 and confirm it visually plays with audible speech; save `studio_run.json` and Blender diagnostics. Fail any stage that is black, visually incorrect, silent, or crashes. Repeat with `--mode demo` before release.

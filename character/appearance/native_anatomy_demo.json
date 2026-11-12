@@ -1,0 +1,18 @@
+{
+  "schema": "livynth.native-anatomy.plan.v1",
+  "source": "owner_mpfb_inventory",
+  "assets": {
+    "eyes": {
+      "relative_path": "high-poly/high-poly.mhclo",
+      "sha256": "b183cfe37120ab726f9b3f2ea6cd3a64c44ce7b4bd91a77c841cf70c04f83a0d"
+    },
+    "teeth": {
+      "relative_path": "teeth_base/teeth_base.mhclo",
+      "sha256": "9edc3deff3bb97a95c791878064dd069a74a38f95ea6d9707a9ba68d888b3b5c"
+    },
+    "tongue": {
+      "relative_path": "tongue01/tongue01.mhclo",
+      "sha256": "61d825899cd78ff3146fa1324118060cb44b095fae1427d408c199ade74e3c9e"
+    }
+  }
+}
