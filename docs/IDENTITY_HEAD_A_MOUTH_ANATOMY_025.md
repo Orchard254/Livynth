@@ -247,3 +247,14 @@ Visual notes (independent review pending):
 2. If approved, a separate export experiment may carry the corrected
    geometry into a GLB (own gate; needs sign-off; nothing done here).
 3. Keep the likeness gate FAIL until independent identity evidence exists.
+
+---
+
+**IDENTITY-026 (2026-11-12) supersedes parts of this report.** A second
+pass fixed the unnatural pink surface (muted copied tongue/teeth
+diffuses), the oversized dental appearance (copied teeth scaled 0.85),
+the sharp lower-lip contour (101-vertex sulcus lift), and corrected the
+cavity-selection mismatch (same-pose evaluated selection + validated
+evaluated↔base polygon correspondence). New collision evidence (Möller
+transversal-crossing counts) is included there:
+`docs/IDENTITY_HEAD_A_MOUTH_ANATOMY_026.md`

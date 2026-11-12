@@ -129,20 +129,357 @@ def _translate_asset_in_body_space(body,asset,offset_fn):
     return audit
 
 
-def _apply_mouth_anatomy(body,teeth,tongue,dental_mask,*,upper_seat,tongue_seat):
-    """Seat upper arch and tongue; darken the exposed mouth cavity faces."""
+def _scale_asset_in_body_space(body,asset,scale,*,label='ASSET'):
+    """Uniformly scale a copied asset about its body-space centroid.
+
+    Like _translate_asset_in_body_space, every shape-key block receives
+    the identical similarity transform so Basis and corrective poses stay
+    consistent. Used to shrink the oversized MPFB dental arch on the
+    disposable copy only.
+    """
+    import numpy as np
+    from mathutils import Vector
+    from tools.mouth_anatomy import plan_uniform_scale
+    if body==asset or body.type!='MESH' or asset.type!='MESH':
+        raise RuntimeError('E_MOUTH_ANATOMY_OBJECT_TYPE_'+str(label))
+    to_body=body.matrix_world.inverted() @ asset.matrix_world
+    to_asset=asset.matrix_world.inverted() @ body.matrix_world
+    before=np.asarray([tuple(to_body @ v.co) for v in asset.data.vertices],
+                      dtype=np.float64)
+    pivot=before.mean(axis=0)
+    target,audit=plan_uniform_scale(before,scale,pivot,label=label)
+    pivot_local=to_asset @ Vector(tuple(float(v) for v in pivot))
+    factor=float(scale)
+    for vertex,position in zip(asset.data.vertices,target):
+        vertex.co=to_asset @ Vector(tuple(float(v) for v in position))
+    keys=asset.data.shape_keys
+    if keys is not None:
+        for key in keys.key_blocks:
+            for point in key.data:
+                delta=(point.co-pivot_local)*factor
+                point.co=pivot_local+delta
+    asset.data.update()
+    stored=np.asarray([tuple(to_body @ v.co) for v in asset.data.vertices],
+                      dtype=np.float64)
+    if keys is not None:
+        basis=keys.key_blocks.get('Basis')
+        if basis is not None:
+            stored=np.asarray([tuple(to_body @ Vector(tuple(k.co)))
+                               for k in basis.data],dtype=np.float64)
+    discrepancy=float(np.linalg.norm(stored-target,axis=1).max())
+    if not np.isfinite(discrepancy) or discrepancy>2e-6:
+        raise RuntimeError('E_MOUTH_ANATOMY_SCALE_MISMATCH_'+str(round(discrepancy,9)))
+    audit['max_storage_error_m']=round(discrepancy,9)
+    audit['shape_key_blocks_scaled']=(
+        len(keys.key_blocks) if keys is not None else 0)
+    audit['pivot_source']='ASSET_BODY_SPACE_CENTROID_BASIS'
+    return audit
+
+
+def _mute_tongue_material(tongue,saturation,value):
+    """Desaturate/darken the copied tongue asset's diffuse contribution.
+
+    Inserts a Hue/Saturation/Value node between the image texture and the
+    Principled BSDF Base Color of every copied tongue slot. The installed
+    MPFB asset and its .mhmat/.png are never opened for writing. Hard
+    error when the expected node graph is missing (no silent skip).
+    """
+    import colorsys
+    applied=[]
+    if not tongue.data.materials:
+        raise RuntimeError('E_MOUTH_ANATOMY_TONGUE_MATERIAL_MISSING')
+    for slot_index,material in enumerate(tongue.data.materials):
+        if material is None:
+            continue
+        if not material.use_nodes:
+            material.use_nodes=True
+        tree=material.node_tree
+        principled=next((n for n in tree.nodes
+                         if n.bl_idname=='ShaderNodeBsdfPrincipled'),None)
+        if principled is None:
+            raise RuntimeError('E_MOUTH_ANATOMY_TONGUE_NO_BSDF_'+str(slot_index))
+        links=[l for l in tree.links
+               if l.to_node==principled and l.to_socket.name=='Base Color']
+        if not links:
+            # flat-color fallback: rescale the default_value via HSV
+            col=principled.inputs['Base Color'].default_value
+            h,s,v=colorsys.rgb_to_hsv(col[0],col[1],col[2])
+            ns,nv=s*float(saturation),v*float(value)
+            r,g,b=colorsys.hsv_to_rgb(h,ns,nv)
+            principled.inputs['Base Color'].default_value=(r,g,b,col[3])
+            applied.append({'material':material.name,'slot':slot_index,
+                            'mode':'FLAT_COLOR_RESCALE',
+                            'saturation':float(saturation),
+                            'value':float(value)})
+            continue
+        for link in list(links):
+            source_socket=link.from_socket
+            tree.links.remove(link)
+            hsv=tree.nodes.new('ShaderNodeHueSaturation')
+            hsv.name='livynth_tongue_mute'
+            hsv.label='LIVYNTH IDENTITY-026 tongue mute'
+            hsv.inputs['Hue'].default_value=0.5
+            hsv.inputs['Saturation'].default_value=float(saturation)
+            hsv.inputs['Value'].default_value=float(value)
+            hsv.inputs['Fac'].default_value=1.0
+            hsv.location=(source_socket.node.location.x+220.0,
+                          source_socket.node.location.y)
+            tree.links.new(source_socket,hsv.inputs['Color'])
+            tree.links.new(hsv.outputs['Color'],
+                           principled.inputs['Base Color'])
+            applied.append({'material':material.name,'slot':slot_index,
+                            'mode':'HSV_NODE_INSERTED',
+                            'saturation':float(saturation),
+                            'value':float(value)})
+    if not applied:
+        raise RuntimeError('E_MOUTH_ANATOMY_TONGUE_MATERIAL_UNREACHED')
+    return applied
+
+
+def _mute_teeth_gum_texture(teeth):
+    """Mute the gum slabs of the copied teeth asset's diffuse texture.
+
+    The installed MPFB teeth.png is never written: the copied material's
+    TexImage node gets an in-memory image COPY whose gum texels are
+    blended toward a dark, desaturated brick tone. Tooth texels are left
+    bit-identical. Hard error when the expected texture is missing.
+    """
     import bpy
     import numpy as np
     from tools.mouth_anatomy import (
-        SCHEMA,UPPER_SEAT_M,TONGUE_SEAT_M,
-        validate_seat,plan_masked_translation,plan_translation,
+        mute_gum_pixels,TEETH_GUM_MUTE_STRENGTH,TEETH_GUM_TONE)
+    applied=[]
+    if not teeth.data.materials:
+        raise RuntimeError('E_MOUTH_ANATOMY_TEETH_MATERIAL_MISSING')
+    for slot_index,material in enumerate(teeth.data.materials):
+        if material is None or not material.use_nodes:
+            continue
+        for node in material.node_tree.nodes:
+            if node.bl_idname!='ShaderNodeTexImage' or node.image is None:
+                continue
+            image=node.image
+            width,height=image.size
+            if width==0 or height==0 or width>4096 or height>4096:
+                raise RuntimeError('E_MOUTH_ANATOMY_TEETH_IMAGE_SIZE_'+
+                                   str(width)+'x'+str(height))
+            muted=image.copy()
+            muted.name='livynth_oral_gum_muted'
+            muted.pack()  # keep fully independent of the installed file
+            node.image=muted
+            count=width*height
+            pixels=np.empty(count*4,dtype=np.float32)
+            muted.pixels.foreach_get(pixels)
+            rgba=pixels.reshape(count,4)[:, :3].astype(np.float64)
+            rgb=rgba.reshape(height,width,3)
+            toned,mask=mute_gum_pixels(
+                rgb,tone=TEETH_GUM_TONE,strength=TEETH_GUM_MUTE_STRENGTH)
+            fraction=float(mask.mean())
+            if not (0.02<=fraction<=0.60):
+                raise RuntimeError('E_MOUTH_ANATOMY_TEETH_GUM_FRACTION_'+
+                                   str(round(fraction,4)))
+            out=np.empty_like(pixels).reshape(count,4)
+            flat=toned.reshape(count,3)
+            out[:, :3]=flat.astype(np.float32)
+            out[:, 3]=pixels.reshape(count,4)[:, 3]
+            muted.pixels.foreach_set(out.reshape(count*4))
+            muted.update()
+            applied.append({'material':material.name,'slot':slot_index,
+                            'image':muted.name,
+                            'gum_texel_fraction':round(fraction,4),
+                            'strength':TEETH_GUM_MUTE_STRENGTH,
+                            'tone':list(TEETH_GUM_TONE),
+                            'installed_file_untouched':True})
+    if not applied:
+        raise RuntimeError('E_MOUTH_ANATOMY_TEETH_TEXIMAGE_NOT_FOUND')
+    return applied
+
+
+def _soften_body_sulcus(body,max_push):
+    """Lift the mentolabial sulcus vertices forward on the copied body.
+
+    Applies the same per-vertex delta to Basis and every corrective key
+    block (the same shape-key-safe pattern as the seat fix), so topology
+    and morph behaviour are preserved. Hard error on storage mismatch.
+    """
+    import numpy as np
+    from mathutils import Vector
+    from tools.mouth_anatomy import (
+        plan_lip_soften,LIP_Z_CENTER,LIP_Z_HALF_SPAN,LIP_X_HALF_SPAN)
+    world=body.matrix_world
+    rot_inv=world.to_3x3().inverted()
+    before=np.asarray([tuple(world @ v.co) for v in body.data.vertices],
+                      dtype=np.float64)
+    target,audit=plan_lip_soften(before,max_push=max_push,label='BODY')
+    # Anti-collision invariant: the lifted sulcus must stay behind the
+    # lip bulge. The lip-bulge band (z >= 1.515) is weight~0 and never
+    # moves, so comparing pre/post front reach is exact for the copy.
+    lip_band=((np.abs(before[:,0])<=0.040) &
+              (before[:,2]>=1.515) & (before[:,2]<=1.640) &
+              (before[:,1]<0.0))
+    sulcus_band=(before[:,1]<0.0) & \
+        (np.abs(before[:,0])<=LIP_X_HALF_SPAN*1.6) & \
+        (np.abs(before[:,2]-LIP_Z_CENTER)<LIP_Z_HALF_SPAN)
+    lip_front=float(before[lip_band,1].min()) if lip_band.any() else float('nan')
+    sulcus_before=float(before[sulcus_band,1].min()) if sulcus_band.any() else float('nan')
+    sulcus_after=float(target[sulcus_band,1].min()) if sulcus_band.any() else float('nan')
+    margin=float(sulcus_after-lip_front)
+    audit['lip_bulge_front_m']=round(lip_front,9)
+    audit['sulcus_front_before_m']=round(sulcus_before,9)
+    audit['sulcus_front_after_m']=round(sulcus_after,9)
+    audit['sulcus_behind_lip_margin_m']=round(margin,9)
+    if not np.isfinite(margin) or margin<0.002:
+        raise RuntimeError('E_MOUTH_ANATOMY_SULCUS_COLLISION_'+str(round(margin,9)))
+    deltas=target-before
+    local_deltas=[tuple(rot_inv @ Vector(tuple(float(c) for c in d)))
+                  for d in deltas]
+    for vertex,delta in zip(body.data.vertices,local_deltas):
+        vertex.co=Vector((vertex.co.x+delta[0],vertex.co.y+delta[1],
+                          vertex.co.z+delta[2]))
+    keys=body.data.shape_keys
+    if keys is not None:
+        for key in keys.key_blocks:
+            for index,point in enumerate(key.data):
+                delta=local_deltas[index]
+                point.co=Vector((point.co.x+delta[0],point.co.y+delta[1],
+                                 point.co.z+delta[2]))
+    body.data.update()
+    if keys is not None:
+        basis=keys.key_blocks.get('Basis')
+        if basis is not None:
+            stored=np.asarray(
+                [tuple(world @ Vector(tuple(k.co))) for k in basis.data],
+                dtype=np.float64)
+            discrepancy=float(np.linalg.norm(stored-target,axis=1).max())
+            if not np.isfinite(discrepancy) or discrepancy>2e-6:
+                raise RuntimeError('E_MOUTH_ANATOMY_SULCUS_MISMATCH_'+
+                                   str(round(discrepancy,9)))
+            audit['max_storage_error_m']=round(discrepancy,9)
+            audit['shape_key_blocks_lifted']=len(keys.key_blocks)
+    return audit
+
+
+def _arch_world_triangles(teeth, teeth_world, mask):
+    """Triangulate the copied teeth and split into upper/lower arch tris."""
+    import numpy as np
+    triangles=[]
+    upper_tris=[]
+    lower_tris=[]
+    mixed_faces=0
+    for poly in teeth.data.polygons:
+        verts=list(poly.vertices)
+        face_tris=[(verts[0],verts[i],verts[i + 1])
+                   for i in range(1,len(verts) - 1)]
+        world_tris=[(teeth_world[a],teeth_world[b],teeth_world[c])
+                    for a,b,c in face_tris]
+        triangles.extend(world_tris)
+        flags=mask[verts]
+        if bool((flags == 1).all()):
+            lower_tris.extend(world_tris)
+        elif bool((flags == 0).all()):
+            upper_tris.extend(world_tris)
+        else:
+            mixed_faces += 1
+    return (np.asarray(triangles,dtype=np.float64),
+            np.asarray(upper_tris,dtype=np.float64),
+            np.asarray(lower_tris,dtype=np.float64),
+            mixed_faces)
+
+
+def _oral_collision_audit(body,teeth,tongue,dental_mask,pose_label):
+    """Clearance + exact transversal-crossing audit of oral assets.
+
+    Distances are point-to-triangle minima (not a volumetric proof).
+    The intersection half uses a Möller transversal-crossing predicate;
+    tangential touches are explicitly not counted as interpenetration.
+    Zero pairs means no transversal crossing was found; it does not
+    certify contact or containment.
+    """
+    import numpy as np
+    from tools.mouth_anatomy import (
+        nearest_triangle_distances,distance_summary,
+        count_intersecting_triangle_pairs)
+    try:
+        mask=np.asarray(dental_mask).astype(np.int64)
+    except (TypeError,ValueError) as exc:
+        raise RuntimeError('E_MOUTH_ANATOMY_MASK_'+str(exc)) from exc
+    if mask.shape!=(len(teeth.data.vertices),) or not np.isin(mask,[0,1]).all():
+        raise RuntimeError('E_MOUTH_ANATOMY_MASK_LAYOUT')
+    snapshot=_evaluated_world_vertices({'teeth':teeth,'tongue':tongue})
+    teeth_world=snapshot['teeth']
+    tongue_world=snapshot['tongue']
+    triangles,upper_tris,lower_tris,mixed_faces=_arch_world_triangles(
+        teeth,teeth_world,mask)
+    tongue_tris=[]
+    for poly in tongue.data.polygons:
+        verts=list(poly.vertices)
+        for i in range(1,len(verts)-1):
+            tongue_tris.append((tongue_world[verts[0]],
+                                tongue_world[verts[i]],
+                                tongue_world[verts[i+1]]))
+    tongue_tris=np.asarray(tongue_tris,dtype=np.float64)
+    tongue_d=nearest_triangle_distances(tongue_world,triangles)
+    upper_mask=(mask==0)
+    lower_mask=(mask==1)
+    distances={
+        'tongue_to_teeth':distance_summary(tongue_d),
+        'mixed_jaw_faces_skipped':mixed_faces,
+    }
+    for name,points,other in (('upper_arch_to_lower',upper_mask,lower_tris),
+                              ('lower_arch_to_upper',lower_mask,upper_tris)):
+        if points.sum() and len(other):
+            distances[name]=distance_summary(
+                nearest_triangle_distances(teeth_world[points],other))
+        else:
+            distances[name]={'min_m':None,'sample_count':0}
+    return {
+        'pose':pose_label,
+        'distance_method':'POINT_TO_TRIANGLE_EVALUATED_WORLD',
+        'intersection_method':'MOLLER_TRANSVERSAL_CROSSING_TEST',
+        'tangential_contact_not_counted':True,
+        'distances':distances,
+        'upper_lower_arch_intersections':(
+            count_intersecting_triangle_pairs(upper_tris,lower_tris)),
+        'tongue_teeth_intersections':(
+            count_intersecting_triangle_pairs(tongue_tris,triangles)),
+    }
+
+
+def _apply_mouth_anatomy(body,teeth,tongue,dental_mask,*,upper_seat,tongue_seat,
+                         tooth_scale=None,lip_push=None,oral_assets=None):
+    """Seat upper arch and tongue; shrink the oversized dental arch; lift
+    the mentolabial sulcus; mute the tongue's pink; darken the exposed
+    mouth-cavity faces.
+
+    All edits happen on the disposable copied scene assets — never on the
+    installed MPFB files, the source human or any exported GLB.
+    ``oral_assets`` (the copied teeth/tongue with corrective morphs) is
+    switched to the jaw-open pose for the BVH/contact evaluation and
+    restored afterwards, so the recorded contacts are the true open-pose
+    contacts, not the rest pose.
+    """
+    import bpy
+    import numpy as np
+    from tools.mouth_anatomy import (
+        SCHEMA,UPPER_SEAT_M,TONGUE_SEAT_M,TOOTH_SCALE,
+        TONGUE_SATURATION,TONGUE_VALUE,LIP_MAX_PUSH_M,
+        validate_seat,validate_tooth_scale,validate_lip_push,
+        plan_masked_translation,plan_translation,
         cavity_z_window,plan_cavity_faces,plan_cavity_faces_bvh,
+        validate_polygon_correspondence,
         CAVITY_BASE_COLOR,EXTERIOR_BASE_COLOR,
         CAVITY_ROUGHNESS,EXTERIOR_ROUGHNESS,
         CAVITY_HALF_WIDTH,CAVITY_OPENING_HALF_WIDTH,CAVITY_MIN_DEPTH_Y,
         CAVITY_SIDE_NORMAL_THRESHOLD)
     upper_seat=validate_seat(upper_seat,'UPPER_SEAT')
     tongue_seat=validate_seat(tongue_seat,'TONGUE_SEAT')
+    tooth_scale=validate_tooth_scale(
+        TOOTH_SCALE if tooth_scale is None else tooth_scale,'TOOTH_SCALE')
+    lip_push=validate_lip_push(
+        LIP_MAX_PUSH_M if lip_push is None else lip_push,'LIP_PUSH')
+    # 1) Oversized dental appearance: uniform down-scale on the copy.
+    tooth_audit=_scale_asset_in_body_space(
+        body,teeth,tooth_scale,label='TEETH')
+    # 2) Seats (scale commutes with the rigid translations).
     upper_audit=_translate_asset_in_body_space(
         body,teeth,
         lambda before: plan_masked_translation(
@@ -152,22 +489,43 @@ def _apply_mouth_anatomy(body,teeth,tongue,dental_mask,*,upper_seat,tongue_seat)
         body,tongue,
         lambda before: plan_translation(
             before,dz=-tongue_seat,label='TONGUE'))
+    # 3) Sharp lower-lip contour: forward lift of the mentolabial sulcus.
+    sulcus_audit=_soften_body_sulcus(body,lip_push)
+    # 4) Unnatural pink surface: desaturate/darken the copied tongue.
+    tongue_material=_mute_tongue_material(
+        tongue,TONGUE_SATURATION,TONGUE_VALUE)
+    # 4b) The upper "gum dinner-plate": mute the gum texels of the copied
+    # teeth diffuse (in-memory image copy only, tooth texels untouched).
+    teeth_gum_texture=_mute_teeth_gum_texture(teeth)
     world=body.matrix_world
     world_min=np.array([min((world @ p.co)[i] for p in body.data.vertices) for i in range(3)],dtype=np.float64)
     world_max=np.array([max((world @ p.co)[i] for p in body.data.vertices) for i in range(3)],dtype=np.float64)
     crown=float(world_max[2])
     height=crown-float(world_min[2])
-    z_min,z_max=cavity_z_window(crown,height,
-                                z_min_fraction=0.870,z_max_fraction=0.915)
-    # Interior mouth walls are only visible when the lips part; select the
-    # cavity polygons on the EVALUATED jaw-open mesh (same polygon order as
-    # the base mesh), then assign materials on the base polygons.
+    base_z_min,base_z_max=cavity_z_window(crown,height,
+                                          z_min_fraction=0.870,
+                                          z_max_fraction=0.915)
+    # Interior mouth walls are only visible when the lips part. Earlier
+    # revisions mixed poses here: BVH rays were cast at the EVALUATED
+    # jawOpen mesh while the centres/normals used for the depth filter
+    # came from the BASE pose, and the index correspondence between the
+    # evaluated and the base mesh was assumed. This revision keeps the
+    # whole selection in the same evaluated jawOpen pose and validates
+    # the evaluated<->base index mapping explicitly before assigning
+    # materials on the base polygons.
     jaw_keys=body.data.shape_keys.key_blocks if body.data.shape_keys else None
     saved_jaw=float(jaw_keys['jawOpen'].value) if (
         jaw_keys is not None and 'jawOpen' in jaw_keys) else None
     temp_object=None
+    contact_open=None
+    pose_applied_with_correctives=False
     try:
-        if saved_jaw is not None:
+        if oral_assets is not None:
+            # body morph AND teeth/tongue correctives to jawOpen together,
+            # so the evaluated pose is the true open pose for both.
+            _set_morphs(body,POSES['jaw_open'],oral_assets=oral_assets)
+            pose_applied_with_correctives=True
+        elif saved_jaw is not None:
             jaw_keys['jawOpen'].value=0.85
             jaw_keys['jawOpen'].keyframe_insert(data_path='value',frame=1)
             bpy.context.scene.frame_set(1)
@@ -184,16 +542,26 @@ def _apply_mouth_anatomy(body,teeth,tongue,dental_mask,*,upper_seat,tongue_seat)
         bpy.context.scene.collection.objects.link(temp_object)
         temp_object.matrix_world=body.matrix_world.copy()
         bpy.context.view_layer.update()
+        eval_world=np.asarray(
+            [tuple((body.matrix_world @ v.co)) for v in temp_mesh.vertices],
+            dtype=np.float64)
+        eval_crown=float(eval_world[:,2].max())
+        eval_height=eval_crown-float(eval_world[:,2].min())
+        z_min,z_max=cavity_z_window(eval_crown,eval_height,
+                                    z_min_fraction=0.870,
+                                    z_max_fraction=0.915)
         candidates=plan_cavity_faces_bvh(
             temp_object,z_min=z_min,z_max=z_max,rays_x=48,rays_z=48)
-        world_matrix=body.matrix_world
+        eval_matrix=temp_object.matrix_world
+        eval_normals_matrix=eval_matrix.to_3x3()
+        eval_polys=temp_object.data.polygons
         centers=[]
         normals=[]
-        normal_matrix=world_matrix.to_3x3()
         for index in candidates:
-            poly=body.data.polygons[index]
-            centers.append(tuple(world_matrix @ poly.center))
-            normals.append(tuple((normal_matrix @ poly.normal).normalized()))
+            poly=eval_polys[index]
+            centers.append(tuple(eval_matrix @ poly.center))
+            normals.append(tuple(
+                (eval_normals_matrix @ poly.normal).normalized()))
         centers=np.asarray(centers,dtype=np.float64)
         normals=np.asarray(normals,dtype=np.float64)
         chosen=plan_cavity_faces(
@@ -202,17 +570,28 @@ def _apply_mouth_anatomy(body,teeth,tongue,dental_mask,*,upper_seat,tongue_seat)
             side_normal_threshold=CAVITY_SIDE_NORMAL_THRESHOLD)
         cavity=sorted(candidates[i] for i in chosen)
         candidate_count=len(candidates)
+        # Never assume the index correspondence between evaluated and
+        # base meshes - validate it explicitly on loop vertex tuples.
+        validated_faces=validate_polygon_correspondence(
+            [tuple(p.vertices) for p in body.data.polygons],
+            [tuple(p.vertices) for p in temp_object.data.polygons])
+        contact_open=_oral_collision_audit(
+            body,teeth,tongue,dental_mask,'jaw_open_0.85')
     finally:
         if temp_object is not None:
             temp_mesh=temp_object.data
             bpy.data.objects.remove(temp_object,do_unlink=True)
             if temp_mesh.users==0:
                 bpy.data.meshes.remove(temp_mesh)
-        if saved_jaw is not None:
+        if pose_applied_with_correctives:
+            _set_morphs(body,POSES['neutral'],oral_assets=oral_assets)
+        elif saved_jaw is not None:
             jaw_keys['jawOpen'].value=saved_jaw
             jaw_keys['jawOpen'].keyframe_insert(data_path='value',frame=1)
             bpy.context.scene.frame_set(1)
             bpy.context.view_layer.update()
+    contact_neutral=_oral_collision_audit(
+        body,teeth,tongue,dental_mask,'neutral')
     if not 8<=len(cavity)<=2000:
         raise RuntimeError('E_MOUTH_ANATOMY_CAVITY_FACE_COUNT_'+str(len(cavity)))
     centers_total=len(body.data.polygons)
@@ -237,16 +616,27 @@ def _apply_mouth_anatomy(body,teeth,tongue,dental_mask,*,upper_seat,tongue_seat)
         'status':'MOUTH_ANATOMY_FIXED_PENDING_VISUAL_REVIEW',
         'upper_seat_m':round(upper_seat,9),
         'tongue_seat_m':round(tongue_seat,9),
+        'tooth_scale':tooth_audit,
+        'tooth_scale_value':round(float(tooth_scale),9),
         'upper':upper_audit,
         'tongue':tongue_audit,
+        'lip_soften':sulcus_audit,
+        'tongue_material':tongue_material,
+        'teeth_gum_texture':teeth_gum_texture,
         'cavity_faces':len(cavity),
         'cavity_candidates':candidate_count,
-        'cavity_method':'BVH_FIRST_HIT_FRONT_OPENINGS_JAWOPEN',
+        'cavity_method':'BVH_FIRST_HIT_FRONT_OPENINGS_JAWOPEN_SAME_POSE_FILTER',
         'cavity_indexes':cavity,
+        'cavity_index_correspondence':'VALIDATED_POLYGON_LOOP_VERTEX_TUPLES',
+        'cavity_validated_polygons':validated_faces,
         'cavity_opening_half_width_m':CAVITY_OPENING_HALF_WIDTH,
         'cavity_side_normal_threshold':CAVITY_SIDE_NORMAL_THRESHOLD,
         'cavity_total_faces':centers_total,
         'cavity_z_window_m':[round(z_min,6),round(z_max,6)],
+        'cavity_z_window_base_m':[round(base_z_min,6),round(base_z_max,6)],
+        'cavity_z_window_evaluated_m':[round(z_min,6),round(z_max,6)],
+        'contact_jaw_open_0_85':contact_open,
+        'contact_neutral':contact_neutral,
         'cavity_half_width_m':CAVITY_HALF_WIDTH,
         'cavity_min_depth_y_m':CAVITY_MIN_DEPTH_Y,
         'body_material_slots':2,
@@ -303,7 +693,7 @@ def _audit_jaw_and_visemes(body,assets,*,use_oral_correctives=False):
     return reports
 
 
-def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False,mhclo_dentition=False,rigged_seam_probe=False,seam_jaw_stills=False,oral_isolation=False,dental_arch_isolation=False,oral_anatomy=False,upper_seat=None,tongue_seat=None):
+def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False,mhclo_dentition=False,rigged_seam_probe=False,seam_jaw_stills=False,oral_isolation=False,dental_arch_isolation=False,oral_anatomy=False,upper_seat=None,tongue_seat=None,tooth_scale=None,lip_push=None):
     import bpy
     import numpy as np
     from bl_ext.user_default.mpfb.services import (
@@ -573,7 +963,9 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
     if oral_anatomy:
         mouth_anatomy_audit=_apply_mouth_anatomy(
             body,actual_assets['teeth'],actual_assets['tongue'],dental_mask,
-            upper_seat=upper_seat,tongue_seat=tongue_seat)
+            upper_seat=upper_seat,tongue_seat=tongue_seat,
+            tooth_scale=tooth_scale,lip_push=lip_push,
+            oral_assets=controlled)
         from character.seamed_jaw_motion import audit_seamed_jaw_motion as _audit_after_fix
         _set_morphs(body,{},oral_assets=controlled)
         neutral_teeth=_evaluated_world_vertices(
@@ -797,6 +1189,10 @@ if __name__=='__main__':
                         help='IDENTITY-025 upper-arch seat (m, default pinned in tools/mouth_anatomy.py)')
     parser.add_argument('--tongue-seat',type=float,default=None,
                         help='IDENTITY-025 tongue seat (m, default pinned in tools/mouth_anatomy.py)')
+    parser.add_argument('--tooth-scale',type=float,default=None,
+                        help='IDENTITY-026 teeth uniform scale (default pinned in tools/mouth_anatomy.py)')
+    parser.add_argument('--lip-push',type=float,default=None,
+                        help='IDENTITY-026 mentolabial sulcus forward lift in m (default pinned)')
     parser.add_argument('--mhclo-dentition',action='store_true',
                         help='Use original MPFB teeth helper mapping instead of visual Z split')
     parser.add_argument('--oral-correctives',action='store_true',
@@ -814,4 +1210,5 @@ if __name__=='__main__':
         oral_isolation=args.oral_isolation,
         dental_arch_isolation=args.dental_arch_isolation,
         oral_anatomy=args.oral_anatomy,
-        upper_seat=args.upper_seat,tongue_seat=args.tongue_seat)
+        upper_seat=args.upper_seat,tongue_seat=args.tongue_seat,
+        tooth_scale=args.tooth_scale,lip_push=args.lip_push)
