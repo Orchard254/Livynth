@@ -124,9 +124,12 @@ def prove_temporary_blender_mesh_copy(obj_file, mappings, faces, diagnostic):
                         for i, v in enumerate(temporary.vertices))
         if not math.isfinite(max_error) or max_error > 0.000002:
             raise SeamCopyError('E_SEAM_COPY_POSITION_DRIFT')
-        saved_faces = Counter(tuple(v for v in poly.vertices)
+        def oriented_cycle(face):
+            items = tuple(face)
+            return min(items[i:] + items[:i] for i in range(len(items)))
+        saved_faces = Counter(oriented_cycle(poly.vertices)
                               for poly in temporary.polygons)
-        if saved_faces != Counter(retained):
+        if saved_faces != Counter(oriented_cycle(face) for face in retained):
             raise SeamCopyError('E_SEAM_COPY_FACES_DIFFER')
         if (len(original.vertices) != len(points) or
             len(original.polygons) != len(faces)):
