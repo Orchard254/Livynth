@@ -39,6 +39,9 @@ import time
 SCRIPT_DIR = os.path.dirname(os.path.abspath(globals().get("__file__", "./")))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
+REPO_DIR = os.path.dirname(SCRIPT_DIR)
+if REPO_DIR not in sys.path:
+    sys.path.insert(0, REPO_DIR)  # character/ identity recipe shared with CPU tests
 
 
 def _parse_args():
@@ -49,6 +52,7 @@ def _parse_args():
     stage1_template = None
     stage1_constraints = None
     stage1_neutral_dump = None
+    identity_recipe = None
     i = 0
     while i < len(argv):
         if argv[i] == "--out" and i + 1 < len(argv):
@@ -75,12 +79,18 @@ def _parse_args():
             stage1_neutral_dump = argv[i + 1]
             i += 2
             continue
+        if argv[i] == "--identity-recipe" and i + 1 < len(argv):
+            identity_recipe = argv[i + 1]
+            i += 2
+            continue
         i += 1
     if stage1_template and stage1_constraints:
         raise ValueError("--stage1-template and --stage1-constraints are exclusive")
     if stage1_constraints and stage1_neutral_dump:
         raise ValueError("Neutral mesh dump must be captured BEFORE a fit; do not combine with constraints")
-    return out, json_out, rig, stage1_template, stage1_constraints, stage1_neutral_dump
+    if identity_recipe and stage1_constraints:
+        raise ValueError("Identity recipe and experimental Stage-1 constraints cannot be combined until both transforms are audited")
+    return out, json_out, rig, stage1_template, stage1_constraints, stage1_neutral_dump, identity_recipe
 
 
 def _clear_scene():
@@ -111,7 +121,7 @@ def _stash_armature_modifier(obj):
 
 
 def main() -> int:
-    out_glb, out_json, rig_name, stage1_template, stage1_constraints, stage1_neutral_dump = _parse_args()
+    out_glb, out_json, rig_name, stage1_template, stage1_constraints, stage1_neutral_dump, identity_recipe = _parse_args()
 
     import bpy
     from bl_ext.user_default.mpfb.services import (
@@ -156,14 +166,30 @@ def main() -> int:
 
     # ---- 1. create the human from the CC0 basemesh -----------------------
     macro = TargetService.get_default_macro_info_dict()
-    # Character 001 is an adult man; use the closest available macro preset.
-    macro["race"] = {"african": 0.0, "asian": 0.0, "caucasian": 1.0}
-    macro["gender"] = 1.0        # MakeHuman convention: 1.0 = male
-    macro["age"] = 0.5
-    macro["muscle"] = 0.5
-    macro["weight"] = 0.5
-    macro["proportions"] = 0.5
-    macro["height"] = 0.5
+    if identity_recipe:
+        # Reusable identity control BEFORE baking and BEFORE facial morphs.
+        # No image inference or source-GLB modification occurs here.
+        from character.identity_recipe import (
+            load_recipe, recipe_sha256, apply_macro_overrides)
+        loaded = load_recipe(identity_recipe)  # strict fail-closed JSON
+        macro = apply_macro_overrides(macro, loaded["macros"])
+        report["identity_recipe"] = {
+            "character_id": loaded["character_id"],
+            "source": loaded["source"],
+            "sha256": recipe_sha256(loaded),
+            "path": os.path.abspath(identity_recipe),
+            "identity_likeness": "UNVERIFIED",
+            "parameters": loaded["macros"],
+        }
+    else:
+        # Preserve the tested Character 001 placeholder's original defaults.
+        macro["race"] = {"african": 0.0, "asian": 0.0, "caucasian": 1.0}
+        macro["gender"] = 1.0        # MPFB: 1.0 = male
+        macro["age"] = 0.5
+        macro["muscle"] = 0.5
+        macro["weight"] = 0.5
+        macro["proportions"] = 0.5
+        macro["height"] = 0.5
     report["macro"] = macro
 
     basemesh = [None]
@@ -276,6 +302,19 @@ def main() -> int:
             new_bm, bake_masks=True, bake_subdiv=True,
             remove_helpers=True, also_proxy=True)
     step("bake_modifiers_remove_helpers", _bake_mods)
+
+    if identity_recipe and not report["errors"] and new_bm is not None:
+        from character.identity_recipe import (
+            neutral_positions_sha256, neutral_topology_sha256)
+        baked = new_bm.data.vertices
+        quads = new_bm.data.polygons
+        report["neutral_identity_geometry"] = {
+            "vertex_count": len(baked),
+            "quad_count": len(quads),
+            "positions_sha256": neutral_positions_sha256(v.co for v in baked),
+            "topology_sha256": neutral_topology_sha256(p.vertices for p in quads),
+            "fingerprint_basis": "baked-native-indices-before-arkit",
+        }
 
     # ---- OPTIONAL Stage-1 geometric fit, BEFORE facial targets ----------
     # Without these flags the Stage-0 baseline execution path is unchanged.

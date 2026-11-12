@@ -63,23 +63,33 @@ def find_blender(explicit='') -> str:
 
 
 def make_plan(*, text: str, mode: str, output_dir: Path, blender: str,
-              glb: Path | None = None, audio: Path | None = None) -> list[Task]:
+              glb: Path | None = None, audio: Path | None = None,
+              identity_recipe: Path | None = None) -> list[Task]:
     if mode not in ('preview', 'smoke', 'video', 'demo'):
         raise ValueError('Mode must be preview, smoke, video or demo')
     if not isinstance(text, str) or not text.strip():
         raise ValueError('Please enter the words the character should say')
     if len(text) > 2000:
         raise ValueError('Maximum script length is 2,000 characters')
+    if identity_recipe is not None:
+        if glb is not None:
+            raise ValueError('Choose either an existing GLB or an identity recipe, not both')
+        from character.identity_recipe import load_recipe
+        load_recipe(identity_recipe)  # Fail before launching Blender.
     out = output_dir.resolve()
     blender_path = str(blender)
     character = glb.resolve() if glb else out / 'neutral_character.glb'
     speech = audio.resolve() if audio else out / 'narration.wav'
     tasks: list[Task] = []
     if glb is None:
-        tasks.append(Task('Generate rigged neutral 3D character',
-            (blender_path, '--background', '--python', str(ROOT/'tools/mpfb_headless_probe.py'), '--',
-             '--out', str(character), '--json', str(out/'character_report.json')),
-            character, 'glb'))
+        command = [blender_path, '--background', '--python',
+                   str(ROOT/'tools/mpfb_headless_probe.py'), '--',
+                   '--out', str(character), '--json', str(out/'character_report.json')]
+        if identity_recipe is not None:
+            command.extend(('--identity-recipe', str(identity_recipe.resolve())))
+        tasks.append(Task('Generate reusable identity character' if identity_recipe else
+                          'Generate rigged neutral 3D character',
+                          tuple(command), character, 'glb'))
     elif not glb.is_file():
         raise ValueError(f'GLB character does not exist: {glb}')
     if audio is None:
@@ -249,7 +259,8 @@ def run_cli(args):
     out = Path(args.out).resolve() if args.out else new_run_dir()
     tasks = make_plan(text=args.text, mode=args.mode, output_dir=out,
                       blender=blender, glb=Path(args.glb) if args.glb else None,
-                      audio=Path(args.audio) if args.audio else None)
+                      audio=Path(args.audio) if args.audio else None,
+                      identity_recipe=Path(args.identity_recipe) if args.identity_recipe else None)
     print(f'LIVYNTH Studio: {len(tasks)} production stages; output folder: {out}', flush=True)
     result = execute(tasks, output_dir=out, log=lambda msg: print(msg, end='', flush=True))
     print('Run result:', result['status'], flush=True)
@@ -272,7 +283,8 @@ def launch_gui():
     transcript = tk.Text(main, height=4, wrap='word')
     transcript.insert('1.0', DEFAULT_TEXT)
     transcript.pack(fill='x', pady=(2, 12))
-    vars = {'glb': tk.StringVar(), 'audio': tk.StringVar(), 'blender': tk.StringVar(), 'out': tk.StringVar()}
+    vars = {'glb': tk.StringVar(), 'audio': tk.StringVar(), 'blender': tk.StringVar(),
+            'out': tk.StringVar(), 'identity_recipe': tk.StringVar()}
     def path_field(key, label, filetypes=None):
         row = ttk.Frame(main)
         row.pack(fill='x', pady=3)
@@ -283,6 +295,7 @@ def launch_gui():
             if path: vars[key].set(path)
         ttk.Button(row, text='Browse…', command=browse).pack(side='left', padx=(8, 0))
     path_field('glb', 'Character GLB (optional)', [('3D character', '*.glb')])
+    path_field('identity_recipe', 'Identity recipe (optional)', [('Identity recipe', '*.json')])
     path_field('audio', 'Voice WAV (optional)', [('PCM WAV', '*.wav')])
     path_field('blender', 'Blender executable', [('Blender', 'blender.exe'), ('All files', '*.*')])
     path_field('out', 'Output folder (optional)')
@@ -304,7 +317,9 @@ def launch_gui():
             txt = transcript.get('1.0', 'end').strip()
             tasks = make_plan(text=txt, mode=mode, output_dir=out, blender=blender,
                               glb=Path(vars['glb'].get()) if vars['glb'].get().strip() else None,
-                              audio=Path(vars['audio'].get()) if vars['audio'].get().strip() else None)
+                              audio=Path(vars['audio'].get()) if vars['audio'].get().strip() else None,
+                              identity_recipe=Path(vars['identity_recipe'].get())
+                                  if vars['identity_recipe'].get().strip() else None)
         except (ValueError, OSError) as e:
             messagebox.showerror('Cannot start', str(e))
             return
@@ -364,6 +379,7 @@ def main(argv=None):
     parser.add_argument('--mode', choices=('preview','smoke','video','demo'), default='preview')
     parser.add_argument('--text', default=DEFAULT_TEXT)
     parser.add_argument('--glb', help='Existing character GLB; omitted = MPFB neutral character')
+    parser.add_argument('--identity-recipe', help='Validated manual MPFB character recipe JSON; exclusive with --glb')
     parser.add_argument('--audio', help='Existing PCM WAV; omitted = Windows local speech')
     parser.add_argument('--blender', default='', help='Blender binary path, auto-detected on Windows')
     parser.add_argument('--out', help='Output folder; default is timestamped output/studio folder')

@@ -29,6 +29,36 @@ class StudioTests(unittest.TestCase):
         return studio.make_plan(text='Hello from Studio.', mode=mode, output_dir=self.folder,
                    blender='fake-blender', glb=self.glb, audio=self.wav)
 
+    def test_optional_identity_recipe_reaches_mpfb_exporter(self):
+        recipe = Path(__file__).resolve().parents[1]/'character/recipes/demo_b.json'
+        tasks = studio.make_plan(text='Demo.', mode='preview', output_dir=self.folder,
+                                 blender='fake-blender', glb=None, audio=self.wav,
+                                 identity_recipe=recipe)
+        self.assertEqual([x.kind for x in tasks], ['glb','png'])
+        self.assertEqual(tasks[0].argv[tasks[0].argv.index('--identity-recipe')+1],
+                         str(recipe.resolve()))
+
+    def test_existing_glb_and_recipe_are_exclusive(self):
+        recipe = Path(__file__).resolve().parents[1]/'character/recipes/demo_a.json'
+        with self.assertRaisesRegex(ValueError, 'either an existing GLB or an identity recipe'):
+            studio.make_plan(text='Demo.',mode='preview',output_dir=self.folder,
+                             blender='fake-blender',glb=self.glb,audio=self.wav,
+                             identity_recipe=recipe)
+
+    def test_invalid_identity_recipe_rejected_before_subprocess(self):
+        bad = self.folder/'fake_recipe.json'
+        bad.write_text('{"schema":"fake"}',encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'E_RECIPE_FIELDS'):
+            studio.make_plan(text='Demo.',mode='preview',output_dir=self.folder,
+                             blender='fake-blender',glb=None,audio=self.wav,
+                             identity_recipe=bad)
+
+    def test_studio_baseline_without_identity_flag_unchanged(self):
+        tasks = studio.make_plan(text='Demo.',mode='preview',output_dir=self.folder,
+                                 blender='fake-blender',glb=None,audio=self.wav)
+        self.assertEqual(tasks[0].kind, 'glb')
+        self.assertNotIn('--identity-recipe',tasks[0].argv)
+
     def test_preview_plan_uses_existing_inputs(self):
         tasks=self.plan()
         self.assertEqual(len(tasks), 1)

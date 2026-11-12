@@ -73,6 +73,16 @@ Owner uploaded the real 540×960 `livynth_preview.png` after the STUDIO-006 prev
 - **STUDIO-007 proposed patch:** raise the center shirt neckline threshold from 0.22 to 0.17 of total height below the crown (shoulder profile from 0.055 to 0.045), explicitly attach skin/shirt materials to imported mesh DATA slots, refresh mesh after material-index assignment, and compare actual rendered forehead-vs-torso RGB. A one-frame Studio preview now fails clearly if navy clothing is not visible. Old baseline geometry and GLB are unchanged. Numerical equivalence tests pass, but new Blender visual QA **UNVERIFIED** until next owner preview.
 - **Product priority:** this is a reversible diagnostic garment only, not real cloth. Next real look-development efforts must integrate recognizable eyeballs/iris, hair, skin PBR and validated Character 001 anatomy. Do not imply diagnostic clay is photorealistic.
 
+## IDENTITY-001 reusable parametric human foundation — 2026-11-12
+
+**Source implemented, native Blender two-identity gate NOT RUN.** Added `character/identity_recipe.py` and two manually authored demonstration recipes; the original MPFB exporter now accepts `--identity-recipe` and applies validated parameters before geometry bake and ARKit shape creation. The resulting native baked vertex and quad connectivity hashes are recorded, together with recipe SHA. This retains one consistent base topology and existing animation interface as the *design contract*, subject to real exports.
+
+`tools/identity_compare.py` rejects identical geometry, topology drift, 163-joint/67-morph incompatibility, different morph or joint names, missing skin or UV, and failed GLB audits. Studio GUI/CLI can select an optional identity recipe, mutually exclusive with an existing GLB. No existing baseline inputs are changed.
+
+**Evidence:** 18/18 pure-Python recipe/comparator tests passed in the authoring environment; seven additional exporter/Studio integration tests are authored but not executed against a full repo checkout here. Actual MPFB Blender builds of demo A and B and revalidation of both facial expressions remain **UNVERIFIED**. Reference-photo fitting is **NOT IMPLEMENTED**: no project image is mapped to a recipe, and Character 001's five-angle identity gate remains **FAIL**. See `docs/IDENTITY_FOUNDATION_001.md` for exact acceptance commands.
+
+**Next decisive experiment:** Windows Blender produce two GLBs and JSON reports from one template, run `identity_compare.py`, then inspect cheap front/profile and blink/jaw stills for both characters. If topology or animation changes, investigate MPFB macro/target compatibility before writing an image-fitting optimizer.
+
 ## Explicit next acceptance gates
 
 1. **Owner Windows integrated smoke**: open the Studio, inspect actual neutral PNG, render a 30-frame MP4 and confirm it visually plays with audible speech; save `studio_run.json` and Blender diagnostics. Fail any stage that is black, visually incorrect, silent, or crashes. Repeat with `--mode demo` before release.
