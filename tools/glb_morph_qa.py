@@ -70,7 +70,16 @@ def inspect_one(path):
     attrs=prim['attributes']
     if not all(key in attrs for key in ('JOINTS_0','WEIGHTS_0','TEXCOORD_0')):
         raise MorphSignalError('E_MISSING_SKIN_OR_UV_ATTRIBUTES')
+    joints=js['accessors'][attrs['JOINTS_0']]
+    weights=js['accessors'][attrs['WEIGHTS_0']]
+    uv=js['accessors'][attrs['TEXCOORD_0']]
+    if (joints.get('type')!='VEC4' or joints.get('componentType') not in (5121,5123)
+        or weights.get('type')!='VEC4' or weights.get('componentType') not in (5121,5123,5126)
+        or uv.get('type')!='VEC2' or uv.get('componentType') not in (5121,5123,5126)):
+        raise MorphSignalError('E_INVALID_SKIN_OR_UV_ACCESSOR')
     position=read_accessor(js,chunk,attrs['POSITION'])
+    if any(acc.get('count')!=len(position) for acc in (joints,weights,uv)):
+        raise MorphSignalError('E_SKIN_OR_UV_VERTEX_COUNT')
     if not position or any(len(p)!=3 or not all(math.isfinite(float(v)) for v in p)
                            for p in position):
         raise MorphSignalError('E_BAD_CHARACTER_POSITION')
