@@ -127,6 +127,44 @@ Also fixed the old tools/measure_glb_topology.py morph-motion measurement: in gl
 
 **Evidence:** source and seven synthetic tests implemented in development branch, but not yet executed against the owner's existing GLB bytes. Do not report facial animation PASS until morph_signal_qa.json is produced, and do not interpret it as visual animation QA. Command: python tools/glb_morph_qa.py --folder output/identity_ab/20261112_045945_179772. See docs/IDENTITY_MORPH_SIGNAL_006.md. Character 001 likeness Phase-3 remains FAIL.
 
+## IDENTITY-006 owner Windows morph-signal gate: PASS (2026-11-12)
+
+The owner pulled the development branch at 8a25fff and supplied a full Windows run:
+
+- Application suite: 176 total, **174 PASS / 2 skipped / 0 failed**.
+- Geometry suite: 174 total, **172 PASS / 2 skipped / 0 failed**.
+- Combined: **346 passed / 4 skipped**, complete local_check PASS.
+- Existing files demo_head_a.glb and demo_head_b.glb passed the strict exported morph-signal test:
+  status PASS_NONZERO_EXPORTED_MORPH_SIGNAL_NOT_VISUAL_ANIMATION.
+- Each contains 163 matching joints, 67 matching morph names, 14,517
+  seam-expanded glTF vertices, nonzero eyeBlinkLeft/Right, jawOpen, mouthClose,
+  mouthPucker, viseme_aa and viseme_PP vertex deltas.
+- Different exported coordinates in **4,576 vertices** at >0.1mm,
+  maximum A/B difference **20.8193mm**.
+
+**Interpretation:** Two distinct GLBs preserve the same rig/morph controls,
+and those seven facial controls have measurable exported deformation.
+Natural visible blinking, mouth closure and speech articulation remain
+UNVERIFIED. Character 001 Phase-3 likeness remains FAIL.
+
+## IDENTITY-007 — matched rendered-expression gate (2026-11-12)
+
+Implemented a Blender CLI for front and three-quarter images of existing
+A/B GLBs, reusing Studio preview lighting and camera. A single Python command
+generates **20 diagnostic stills** plus an HTML side-by-side gallery, refusing
+incompatible GLBs, absent/identical rendered expressions, malformed PNG
+payloads and missing images. Fifteen hermetic tests were authored for the
+new pose contract, pixel detection, image integrity and runner orchestration.
+The authoring environment lacks Blender; **new test suite and actual Windows
+pose rendering NOT VERIFIED yet**.
+
+Run on the owner PC without rebuilding GLBs:
+
+    python tools/run_identity_pose_review.py --folder output\identity_ab\20261112_045945_179772
+
+See docs/IDENTITY_RENDERED_POSE_007.md. Even a complete render manifest
+means CAPTURED_REQUIRES_HUMAN_VISUAL_REVIEW, not approved likeness or animation.
+
 ## Explicit next acceptance gates
 
 1. **Owner Windows integrated smoke**: open the Studio, inspect actual neutral PNG, render a 30-frame MP4 and confirm it visually plays with audible speech; save `studio_run.json` and Blender diagnostics. Fail any stage that is black, visually incorrect, silent, or crashes. Repeat with `--mode demo` before release.
