@@ -119,9 +119,16 @@ class IsolationReviewTests(unittest.TestCase):
     def test_tongue_visibility_mislabel_rejected(self):
         report=valid_report()
         report['oral_asset_visibility_audit'][1]['tongue_visible']=True
-        with self.assertRaisesRegex(IsolationReviewError,
-                                    'E_ID023_VISIBILITY_AUDIT'):
-            validate(report,self.out)
+        with patch('tools.run_mpfb_oral_isolation.check_png_dimensions') as check:
+            with self.assertRaisesRegex(IsolationReviewError,
+                                        'E_ID023_VISIBILITY_AUDIT'):
+                validate(report,self.out)
+            # Metadata must fail before any missing-image disk access.
+            check.assert_not_called()
+
+    def test_valid_metadata_still_requires_real_png_files(self):
+        with self.assertRaises(FileNotFoundError):
+            validate(valid_report(),self.out)
 
     def test_missing_still_is_rejected(self):
         report=valid_report()
