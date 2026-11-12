@@ -144,3 +144,36 @@ def apply_head_shape(points, faces, controls):
                   'controls':validate_controls(controls),
                   'identity_likeness':'UNVERIFIED'})
     return fit,audit
+
+
+def audit_realized_head_shape(source, planned, stored, quads, *, max_storage_error_m=2e-7):
+    """Validate the *actual stored* vertex coordinates after Blender float32 writes.
+
+    The fitter plans in float64, whereas Blender mesh coordinates are float32.
+    Hashing the float64 plan cannot equal the hash of Blender's stored vertices.
+    Compare against an explicitly quantized plan, then re-check local topology
+    safety on the realized coordinates. Never accept an unverified hash swap.
+    """
+    source = np.asarray(source, dtype=np.float64)
+    planned = np.asarray(planned, dtype=np.float64)
+    stored = np.asarray(stored, dtype=np.float64)
+    if (source.shape != planned.shape or source.shape != stored.shape or
+        source.ndim != 2 or source.shape[1] != 3 or
+        not np.isfinite(source).all() or not np.isfinite(planned).all() or
+        not np.isfinite(stored).all()):
+        raise InvalidHeadShape('E_HEAD_STORED_SHAPE')
+    expected = planned.astype(np.float32).astype(np.float64)
+    discrepancy = np.linalg.norm(expected - stored, axis=1)
+    max_error = float(discrepancy.max())
+    if max_error > max_storage_error_m:
+        raise InvalidHeadShape('E_HEAD_STORAGE_MISMATCH')
+    audit = check_deformation(source, stored, quads)
+    actual_delta = np.linalg.norm(stored - source, axis=1)
+    audit.update({
+        'max_displacement_m': float(actual_delta.max()),
+        'moved_vertices_gt_0_1_mm': int((actual_delta > 0.0001).sum()),
+        'max_storage_error_m': max_error,
+        'vertex_coordinate_encoding': 'Blender_mesh_float32_xyz',
+        'identity_likeness': 'UNVERIFIED',
+    })
+    return audit
