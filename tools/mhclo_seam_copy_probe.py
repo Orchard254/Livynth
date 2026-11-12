@@ -78,7 +78,7 @@ def plan_seam_copy(mappings, faces, diagnostic):
 
 
 def prove_temporary_blender_mesh_copy(obj_file, mappings, faces, diagnostic):
-    """Test BMesh FACES_ONLY on temporary geometry, then destroy both meshes."""
+    """Test BMesh face deletion on temporary geometry, then destroy both meshes."""
     import bpy
     import bmesh
 
@@ -106,8 +106,10 @@ def prove_temporary_blender_mesh_copy(obj_file, mappings, faces, diagnostic):
         original_id = bm.verts.layers.int.new('livynth_probe_original_id')
         for i, vertex in enumerate(bm.verts):
             vertex[original_id] = i
+        # Remove orphaned bridge edges as well as faces. The dry-run
+        # already required every vertex to remain in a retained polygon.
         bmesh.ops.delete(
-            bm, geom=[bm.faces[i] for i in bridge], context='FACES_ONLY')
+            bm, geom=[bm.faces[i] for i in bridge], context='FACES')
         bm.to_mesh(temporary)
         temporary.update()
         bm.free()
@@ -131,6 +133,10 @@ def prove_temporary_blender_mesh_copy(obj_file, mappings, faces, diagnostic):
                               for poly in temporary.polygons)
         if saved_faces != Counter(oriented_cycle(face) for face in retained):
             raise SeamCopyError('E_SEAM_COPY_FACES_DIFFER')
+        crossed_edges=sum(int(_mask[e.vertices[0]] != _mask[e.vertices[1]])
+                          for e in temporary.edges)
+        if crossed_edges:
+            raise SeamCopyError('E_SEAM_COPY_CROSS_JAW_EDGE')
         if (len(original.vertices) != len(points) or
             len(original.polygons) != len(faces)):
             raise SeamCopyError('E_SEAM_COPY_ORIGINAL_CHANGED')
@@ -142,6 +148,7 @@ def prove_temporary_blender_mesh_copy(obj_file, mappings, faces, diagnostic):
             'original_vertex_order_preserved':True,
             'max_position_error_m':round(max_error,9),
             'retained_faces_identical':True,
+            'cross_jaw_edges_after':0,
             'post_cut_upper_vertices':audit['upper_teeth_vertices'],
             'post_cut_lower_vertices':audit['lower_teeth_vertices'],
             'production_classifier_on_retained_faces':audit['status'],
