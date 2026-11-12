@@ -32,7 +32,7 @@ POSES={
 }
 
 
-def _render(scene,body,filename,angle_deg,output):
+def _render(scene,body,filename,angle_deg,output,*,oral_closeup=False):
     import bpy
     from mathutils import Vector
     from video.render_talk import bounds,shot_settings
@@ -40,8 +40,8 @@ def _render(scene,body,filename,angle_deg,output):
     h=hi[2]-lo[2]
     settings=shot_settings(h,'studio')
     target=Vector(((lo[0]+hi[0])*.5,(lo[1]+hi[1])*.5,
-                   hi[2]-h*settings['camera_drop']))
-    radius=max(1.4,2.0*h)
+                   hi[2]-h*(0.135 if oral_closeup else settings['camera_drop'])))
+    radius=max(0.44,0.43*h) if oral_closeup else max(1.4,2.0*h)
     theta=math.radians(angle_deg)
     scene.camera.location=target+Vector(
         (radius*math.sin(theta),-radius*math.cos(theta),0))
@@ -371,14 +371,28 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
         body,actual_assets,use_oral_correctives=oral_correctives)
         if audit_oral_motion else None)
 
+    seam_jaw_motion_audit=None
+    if seam_jaw_stills:
+        from character.seamed_jaw_motion import audit_seamed_jaw_motion
+        _set_morphs(body,{},oral_assets=controlled)
+        neutral_teeth=_evaluated_world_vertices({'teeth':actual_assets['teeth']})['teeth']
+        _set_morphs(body,POSES['jaw_open'],oral_assets=controlled)
+        opened_teeth=_evaluated_world_vertices({'teeth':actual_assets['teeth']})['teeth']
+        seam_jaw_motion_audit=audit_seamed_jaw_motion(
+            neutral_teeth,opened_teeth,dental_mask)
+        _set_morphs(body,{},oral_assets=controlled)
+
     if seam_jaw_stills and (
             not isinstance(oral_motion_audit,dict) or
             oral_motion_audit.get('jaw_open',{}).get('status')!=
-                'ORAL_MOTION_PRESENT_NOT_VISUALLY_APPROVED'):
+                'ORAL_MOTION_PRESENT_NOT_VISUALLY_APPROVED' or
+            seam_jaw_motion_audit['status']!=
+                'PASS_LOWER_JAW_MOTION_UPPER_STABLE_NOT_VISUAL_QA'):
         (output/'seam_jaw_gate_failure.json').write_text(
             json.dumps({'status':'FAIL_ID022_ORAL_MOTION_BEFORE_RENDER',
                         'oral_motion_audit':oral_motion_audit,
-                        'seam_copy_audit':seam_copy_audit},
+                        'seam_copy_audit':seam_copy_audit,
+                        'seam_jaw_motion_audit':seam_jaw_motion_audit},
                        indent=2)+'\n',encoding='utf-8')
         raise RuntimeError('E_ID022_ORAL_MOTION_BEFORE_RENDER')
     images=[]
@@ -386,7 +400,8 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
         # Only two front stills for a first owner visual gate. No A/B batch.
         for label in ('neutral','jaw_open'):
             _set_morphs(body,POSES[label],oral_assets=controlled)
-            images.append(_render(scene,body,'front_'+label,0,output))
+            images.append(_render(
+                scene,body,'front_'+label,0,output,oral_closeup=True))
     else:
         for label,weights in POSES.items():
             _set_morphs(body,weights,oral_assets=controlled)
@@ -418,6 +433,7 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
                                     if mhclo_dentition else 'LEGACY_Z_SPLIT'),
         'dental_mapping_audit':dental_mapping_audit,
         'seamed_render_copy_audit':seam_copy_audit,
+        'seamed_jaw_motion_audit':seam_jaw_motion_audit,
         'oral_motion_audit':oral_motion_audit,
         'oral_motion_status':('RECORDED_DO_NOT_INFER_VISUAL_APPROVAL'
                               if oral_motion_audit else 'NOT_RUN'),
@@ -435,6 +451,8 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
         'render_scope':('HEAD_A_FRONT_NEUTRAL_AND_JAW_OPEN_ONLY'
                         if seam_jaw_stills else 'STANDARD_AB_POSES'),
         'dental_visual_quality':'PENDING_INDEPENDENT_REVIEW',
+        'framing':('MOUTH_FOCUSED_FACE_CLOSEUP'
+                   if seam_jaw_stills else 'EXISTING_STANDARD_SHOT'),
         'full_character_glb_export':'NOT_TESTED',
     }
     (output/'anatomy_pose_report.json').write_text(
