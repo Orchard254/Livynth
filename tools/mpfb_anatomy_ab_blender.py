@@ -82,6 +82,186 @@ def _set_morphs(body,weights,*,oral_assets=None):
     bpy.context.view_layer.update()
 
 
+def _translate_asset_in_body_space(body,asset,offset_fn):
+    """Apply offset_fn(body_space_positions) -> (target_positions,audit).
+
+    Shape keys in Blender 4.5 store ABSOLUTE vertex positions and the
+    evaluated mesh ignores plain mesh.vertices writes once shape keys exist.
+    Translating every key block by the same delta keeps Basis, jawOpen and
+    viseme_aa consistent in every pose.
+    """
+    import numpy as np
+    from mathutils import Vector
+    if body==asset or body.type!='MESH' or asset.type!='MESH':
+        raise RuntimeError('E_MOUTH_ANATOMY_OBJECT_TYPE')
+    to_body=body.matrix_world.inverted() @ asset.matrix_world
+    to_asset=asset.matrix_world.inverted() @ body.matrix_world
+    rotation=to_asset.to_3x3()
+    before=np.asarray([tuple(to_body @ v.co) for v in asset.data.vertices],
+                      dtype=np.float64)
+    target,audit=offset_fn(before)
+    deltas=target-before
+    asset_deltas=[tuple(rotation @ Vector(tuple(float(x) for x in d))) for d in deltas]
+    for vertex,position in zip(asset.data.vertices,target):
+        vertex.co=to_asset @ Vector(tuple(float(v) for v in position))
+    keys=asset.data.shape_keys
+    if keys is not None:
+        for key in keys.key_blocks:
+            block=key.data
+            for i,d in enumerate(asset_deltas):
+                local=block[i].co
+                block[i].co=Vector((local.x+d[0],local.y+d[1],local.z+d[2]))
+    asset.data.update()
+    # Verify the stored Basis actually reflects the planned translation.
+    stored=np.asarray([tuple(to_body @ v.co) for v in asset.data.vertices],
+                      dtype=np.float64)
+    if keys is not None:
+        basis=keys.key_blocks.get('Basis')
+        if basis is not None:
+            stored=np.asarray([tuple(to_body @ Vector(tuple(k.co)))
+                               for k in basis.data],dtype=np.float64)
+    discrepancy=float(np.linalg.norm(stored-target,axis=1).max())
+    if not np.isfinite(discrepancy) or discrepancy>2e-6:
+        raise RuntimeError('E_MOUTH_ANATOMY_STORAGE_MISMATCH_'+str(round(discrepancy,9)))
+    audit['max_storage_error_m']=round(discrepancy,9)
+    audit['shape_key_blocks_translated']=(
+        len(keys.key_blocks) if keys is not None else 0)
+    return audit
+
+
+def _apply_mouth_anatomy(body,teeth,tongue,dental_mask,*,upper_seat,tongue_seat):
+    """Seat upper arch and tongue; darken the exposed mouth cavity faces."""
+    import bpy
+    import numpy as np
+    from tools.mouth_anatomy import (
+        SCHEMA,UPPER_SEAT_M,TONGUE_SEAT_M,
+        validate_seat,plan_masked_translation,plan_translation,
+        cavity_z_window,plan_cavity_faces,plan_cavity_faces_bvh,
+        CAVITY_BASE_COLOR,EXTERIOR_BASE_COLOR,
+        CAVITY_ROUGHNESS,EXTERIOR_ROUGHNESS,
+        CAVITY_HALF_WIDTH,CAVITY_OPENING_HALF_WIDTH,CAVITY_MIN_DEPTH_Y,
+        CAVITY_SIDE_NORMAL_THRESHOLD)
+    upper_seat=validate_seat(upper_seat,'UPPER_SEAT')
+    tongue_seat=validate_seat(tongue_seat,'TONGUE_SEAT')
+    upper_audit=_translate_asset_in_body_space(
+        body,teeth,
+        lambda before: plan_masked_translation(
+            before,dental_mask,dz=-upper_seat,select_value=0,
+            label='UPPER_TEETH'))
+    tongue_audit=_translate_asset_in_body_space(
+        body,tongue,
+        lambda before: plan_translation(
+            before,dz=-tongue_seat,label='TONGUE'))
+    world=body.matrix_world
+    world_min=np.array([min((world @ p.co)[i] for p in body.data.vertices) for i in range(3)],dtype=np.float64)
+    world_max=np.array([max((world @ p.co)[i] for p in body.data.vertices) for i in range(3)],dtype=np.float64)
+    crown=float(world_max[2])
+    height=crown-float(world_min[2])
+    z_min,z_max=cavity_z_window(crown,height,
+                                z_min_fraction=0.870,z_max_fraction=0.915)
+    # Interior mouth walls are only visible when the lips part; select the
+    # cavity polygons on the EVALUATED jaw-open mesh (same polygon order as
+    # the base mesh), then assign materials on the base polygons.
+    jaw_keys=body.data.shape_keys.key_blocks if body.data.shape_keys else None
+    saved_jaw=float(jaw_keys['jawOpen'].value) if (
+        jaw_keys is not None and 'jawOpen' in jaw_keys) else None
+    temp_object=None
+    try:
+        if saved_jaw is not None:
+            jaw_keys['jawOpen'].value=0.85
+            jaw_keys['jawOpen'].keyframe_insert(data_path='value',frame=1)
+            bpy.context.scene.frame_set(1)
+            bpy.context.view_layer.update()
+        depsgraph=bpy.context.evaluated_depsgraph_get()
+        depsgraph.update()
+        evaluated=body.evaluated_get(depsgraph)
+        temp_mesh=bpy.data.meshes.new_from_object(
+            evaluated,preserve_all_data_layers=False,depsgraph=depsgraph)
+        if temp_mesh is None:
+            raise RuntimeError('E_MOUTH_ANATOMY_EVALUATED_MESH')
+        temp_object=bpy.data.objects.new(
+            'livynth_oral_cavity_probe',temp_mesh)
+        bpy.context.scene.collection.objects.link(temp_object)
+        temp_object.matrix_world=body.matrix_world.copy()
+        bpy.context.view_layer.update()
+        candidates=plan_cavity_faces_bvh(
+            temp_object,z_min=z_min,z_max=z_max,rays_x=48,rays_z=48)
+        world_matrix=body.matrix_world
+        centers=[]
+        normals=[]
+        normal_matrix=world_matrix.to_3x3()
+        for index in candidates:
+            poly=body.data.polygons[index]
+            centers.append(tuple(world_matrix @ poly.center))
+            normals.append(tuple((normal_matrix @ poly.normal).normalized()))
+        centers=np.asarray(centers,dtype=np.float64)
+        normals=np.asarray(normals,dtype=np.float64)
+        chosen=plan_cavity_faces(
+            centers,normals,half_width=CAVITY_OPENING_HALF_WIDTH,
+            z_min=z_min,z_max=z_max,min_depth_y=CAVITY_MIN_DEPTH_Y,
+            side_normal_threshold=CAVITY_SIDE_NORMAL_THRESHOLD)
+        cavity=sorted(candidates[i] for i in chosen)
+        candidate_count=len(candidates)
+    finally:
+        if temp_object is not None:
+            temp_mesh=temp_object.data
+            bpy.data.objects.remove(temp_object,do_unlink=True)
+            if temp_mesh.users==0:
+                bpy.data.meshes.remove(temp_mesh)
+        if saved_jaw is not None:
+            jaw_keys['jawOpen'].value=saved_jaw
+            jaw_keys['jawOpen'].keyframe_insert(data_path='value',frame=1)
+            bpy.context.scene.frame_set(1)
+            bpy.context.view_layer.update()
+    if not 8<=len(cavity)<=2000:
+        raise RuntimeError('E_MOUTH_ANATOMY_CAVITY_FACE_COUNT_'+str(len(cavity)))
+    centers_total=len(body.data.polygons)
+    exterior=bpy.data.materials.new('livynth_oral_exterior_clay')
+    exterior.use_nodes=True
+    principled=exterior.node_tree.nodes.get('Principled BSDF')
+    principled.inputs['Base Color'].default_value=EXTERIOR_BASE_COLOR
+    principled.inputs['Roughness'].default_value=EXTERIOR_ROUGHNESS
+    cavity_mat=bpy.data.materials.new('livynth_oral_cavity')
+    cavity_mat.use_nodes=True
+    principled=cavity_mat.node_tree.nodes.get('Principled BSDF')
+    principled.inputs['Base Color'].default_value=CAVITY_BASE_COLOR
+    principled.inputs['Roughness'].default_value=CAVITY_ROUGHNESS
+    body.data.materials.append(exterior)
+    body.data.materials.append(cavity_mat)
+    cavity_set=set(cavity)
+    for index,poly in enumerate(body.data.polygons):
+        poly.material_index=1 if index in cavity_set else 0
+    body.data.update()
+    return {
+        'schema':SCHEMA,
+        'status':'MOUTH_ANATOMY_FIXED_PENDING_VISUAL_REVIEW',
+        'upper_seat_m':round(upper_seat,9),
+        'tongue_seat_m':round(tongue_seat,9),
+        'upper':upper_audit,
+        'tongue':tongue_audit,
+        'cavity_faces':len(cavity),
+        'cavity_candidates':candidate_count,
+        'cavity_method':'BVH_FIRST_HIT_FRONT_OPENINGS_JAWOPEN',
+        'cavity_indexes':cavity,
+        'cavity_opening_half_width_m':CAVITY_OPENING_HALF_WIDTH,
+        'cavity_side_normal_threshold':CAVITY_SIDE_NORMAL_THRESHOLD,
+        'cavity_total_faces':centers_total,
+        'cavity_z_window_m':[round(z_min,6),round(z_max,6)],
+        'cavity_half_width_m':CAVITY_HALF_WIDTH,
+        'cavity_min_depth_y_m':CAVITY_MIN_DEPTH_Y,
+        'body_material_slots':2,
+        'body_topology_modified':False,
+        'teeth_topology_modified':False,
+        'tongue_topology_modified':False,
+        'upper_arch_translation_xyz_m':[0.0,0.0,-round(upper_seat,9)],
+        'tongue_translation_xyz_m':[0.0,0.0,-round(tongue_seat,9)],
+        'source_assets_modified':False,
+        'installed_mhclo_obj_modified':False,
+        'source_human_modified':False,
+        'existing_glbs_modified':False,
+    }
+
+
 def _evaluated_world_vertices(objects):
     """Snapshot Blender dependency-graph evaluated mesh positions in world space.
 
@@ -123,13 +303,26 @@ def _audit_jaw_and_visemes(body,assets,*,use_oral_correctives=False):
     return reports
 
 
-def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False,mhclo_dentition=False,rigged_seam_probe=False,seam_jaw_stills=False,oral_isolation=False,dental_arch_isolation=False):
+def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False,mhclo_dentition=False,rigged_seam_probe=False,seam_jaw_stills=False,oral_isolation=False,dental_arch_isolation=False,oral_anatomy=False,upper_seat=None,tongue_seat=None):
     import bpy
     import numpy as np
     from bl_ext.user_default.mpfb.services import (
         HumanService,TargetService,ExportService,FaceService,RigService,AssetService)
     from video.render_talk import camera_and_lights
     from tools.mpfb_headless_probe import _stash_armature_modifier
+    from tools.mouth_anatomy import UPPER_SEAT_M,TONGUE_SEAT_M
+
+    if oral_anatomy:
+        if character!='demo_head_a' or rigged_seam_probe:
+            raise ValueError('E_ID025_REQUIRES_HEAD_A')
+        if oral_isolation or dental_arch_isolation:
+            raise ValueError('E_ID025_EXCLUSIVE_MODE')
+        if not all((align_accessories,audit_oral_motion,oral_correctives,
+                    mhclo_dentition)):
+            raise ValueError('E_ID025_REQUIRES_VERIFIED_ORAL_PIPELINE')
+        upper_seat=UPPER_SEAT_M if upper_seat is None else float(upper_seat)
+        tongue_seat=TONGUE_SEAT_M if tongue_seat is None else float(tongue_seat)
+        seam_jaw_stills=True
 
     if oral_correctives and not (align_accessories and audit_oral_motion):
         raise ValueError('E_ORAL_CORRECTIVES_REQUIRE_ALIGNMENT_AND_AUDIT')
@@ -376,6 +569,24 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
         body,actual_assets,use_oral_correctives=oral_correctives)
         if audit_oral_motion else None)
 
+    mouth_anatomy_audit=None
+    if oral_anatomy:
+        mouth_anatomy_audit=_apply_mouth_anatomy(
+            body,actual_assets['teeth'],actual_assets['tongue'],dental_mask,
+            upper_seat=upper_seat,tongue_seat=tongue_seat)
+        from character.seamed_jaw_motion import audit_seamed_jaw_motion as _audit_after_fix
+        _set_morphs(body,{},oral_assets=controlled)
+        neutral_teeth=_evaluated_world_vertices(
+            {'teeth':actual_assets['teeth']})['teeth']
+        _set_morphs(body,POSES['jaw_open'],oral_assets=controlled)
+        opened_teeth=_evaluated_world_vertices(
+            {'teeth':actual_assets['teeth']})['teeth']
+        after_fix=_audit_after_fix(neutral_teeth,opened_teeth,dental_mask)
+        mouth_anatomy_audit['seamed_jaw_motion_after_fix']=after_fix
+        if after_fix['status']!='PASS_LOWER_JAW_MOTION_UPPER_STABLE_NOT_VISUAL_QA':
+            raise RuntimeError('E_ID025_ORAL_MOTION_AFTER_FIX')
+        _set_morphs(body,{},oral_assets=controlled)
+
     seam_jaw_motion_audit=None
     if seam_jaw_stills:
         from character.seamed_jaw_motion import audit_seamed_jaw_motion
@@ -404,7 +615,21 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
     oral_visibility_audit=None
     dental_arch_location_audit=None
     dental_arch_render_audit=None
-    if dental_arch_isolation:
+    if oral_anatomy:
+        # IDENTITY-025: neutral, jaw-open and speech poses after the mouth fix.
+        for label in ('neutral','jaw_open'):
+            _set_morphs(body,POSES[label],oral_assets=controlled)
+            images.append(_render(
+                scene,body,'front_'+label,0,output,oral_closeup=True))
+        for label in ('viseme_aa','viseme_pp'):
+            _set_morphs(body,POSES[label],oral_assets=controlled)
+            images.append(_render(
+                scene,body,'front_'+label,0,output,oral_closeup=True))
+        _set_morphs(body,POSES['viseme_aa'],oral_assets=controlled)
+        images.append(_render(
+            scene,body,'three_quarter_viseme_aa',38,output,oral_closeup=True))
+        _set_morphs(body,{},oral_assets=controlled)
+    elif dental_arch_isolation:
         from character.seamed_jaw_motion import PASS as SEAM_PASS
         from tools.mhclo_arch_attribution import (
             isolated_arch_objects,arch_location_audit)
@@ -483,7 +708,9 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
         images.append(_render(scene,body,'three_quarter_jaw_open',38,output))
     report={
         'schema':SCHEMA,'character_id':character,
-        'status':('CAPTURED_HEAD_A_DENTAL_ARCH_ISOLATION_PENDING_VISUAL_REVIEW'
+        'status':('CAPTURED_HEAD_A_MOUTH_ANATOMY_PENDING_VISUAL_REVIEW'
+                  if oral_anatomy else
+                  'CAPTURED_HEAD_A_DENTAL_ARCH_ISOLATION_PENDING_VISUAL_REVIEW'
                   if dental_arch_isolation else
                   'CAPTURED_HEAD_A_ORAL_ISOLATION_PENDING_VISUAL_REVIEW'
                   if oral_isolation else
@@ -511,6 +738,7 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
         'dental_mapping_audit':dental_mapping_audit,
         'seamed_render_copy_audit':seam_copy_audit,
         'seamed_jaw_motion_audit':seam_jaw_motion_audit,
+        'mouth_anatomy_audit':mouth_anatomy_audit,
         'oral_asset_visibility_audit':oral_visibility_audit,
         'dental_arch_location_audit':dental_arch_location_audit,
         'dental_arch_render_audit':dental_arch_render_audit,
@@ -528,7 +756,9 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
         'eyes_teeth_tongue_follow_expression':'PENDING_VISUAL_REVIEW',
         'natural_animation':'NOT_TESTED',
         'character_001_likeness':'NOT_TESTED',
-        'render_scope':('HEAD_A_JAW_OPEN_DENTAL_ARCH_ATTRIBUTION_ONLY'
+        'render_scope':('HEAD_A_NEUTRAL_JAWOPEN_AND_SPEECH_MOUTH_ANATOMY'
+                        if oral_anatomy else
+                        'HEAD_A_JAW_OPEN_DENTAL_ARCH_ATTRIBUTION_ONLY'
                         if dental_arch_isolation else
                         'HEAD_A_JAW_OPEN_ORAL_ASSET_VISIBILITY_ONLY'
                         if oral_isolation else
@@ -561,6 +791,12 @@ if __name__=='__main__':
                         help='IDENTITY-023 Head A jaw-open with teeth/tongue on-off comparison')
     parser.add_argument('--dental-arch-isolation',action='store_true',
                         help='IDENTITY-024 split evaluated upper/lower jaw arches for attribution')
+    parser.add_argument('--oral-anatomy',action='store_true',
+                        help='IDENTITY-025 opt-in mouth anatomy fix + five mouth-focused stills')
+    parser.add_argument('--upper-seat',type=float,default=None,
+                        help='IDENTITY-025 upper-arch seat (m, default pinned in tools/mouth_anatomy.py)')
+    parser.add_argument('--tongue-seat',type=float,default=None,
+                        help='IDENTITY-025 tongue seat (m, default pinned in tools/mouth_anatomy.py)')
     parser.add_argument('--mhclo-dentition',action='store_true',
                         help='Use original MPFB teeth helper mapping instead of visual Z split')
     parser.add_argument('--oral-correctives',action='store_true',
@@ -576,4 +812,6 @@ if __name__=='__main__':
         rigged_seam_probe=args.rigged_seam_probe,
         seam_jaw_stills=args.seam_jaw_stills,
         oral_isolation=args.oral_isolation,
-        dental_arch_isolation=args.dental_arch_isolation)
+        dental_arch_isolation=args.dental_arch_isolation,
+        oral_anatomy=args.oral_anatomy,
+        upper_seat=args.upper_seat,tongue_seat=args.tongue_seat)

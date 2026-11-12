@@ -559,3 +559,7 @@ Character 001 source-photo five-view gate remains FAIL.
 - Never claim that 67 targets existing means the subject is photorealistic or that a soundtrack's MP4 track proves it is audible.
 
 **Status interpretation:** LOCAL PYTHON PASS means synthetic/tooling tests ran, OWNER WINDOWS PASS means evidence was provided from the owner's machine; UNVERIFIED means no acceptable measured output is available. They are not interchangeable.
+
+## IDENTITY-025 — Head A mouth anatomy (2026-11-12)
+
+Opt-in fix behind `--oral-anatomy`: upper-arch seat −0.022 m, tongue seat −0.016 m (rigid translations, all Blender 4.5 shape-key blocks translated together), and a BVH first-hit front-opening selection that gives the exposed mouth interior a dark oral-cavity material (16 polygons). Measured after fix: upper arch z 1.546–1.567 in all poses (was entirely above the opening), oral assets touch without interpenetrating (min 0.001–0.118 mm), jaw-open/neutral/speech stills render an anatomically plausible mouth with no neck-edge artefacts, `PASS_LOWER_JAW_MOTION_UPPER_STABLE_NOT_VISUAL_QA` preserved after the fix, 391/391 repo tests pass. Original GLBs/assets untouched. Visual quality still PENDING_INDEPENDENT_REVIEW; no likeness claim. Detailed evidence: `docs/IDENTITY_HEAD_A_MOUTH_ANATOMY_025.md`.
