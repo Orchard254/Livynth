@@ -73,7 +73,7 @@ def _set_morphs(body,weights):
     bpy.context.view_layer.update()
 
 
-def run(character,plan_file,output):
+def run(character,plan_file,output,*,align_accessories=False):
     import bpy
     import numpy as np
     from bl_ext.user_default.mpfb.services import (
@@ -164,6 +164,18 @@ def run(character,plan_file,output):
     body.data.update()
     actual=np.asarray([tuple(v.co) for v in body.data.vertices],dtype=np.float64)
     shape_audit=audit_realized_head_shape(source_points,planned,actual,quads)
+    alignment_audits={}
+    if align_accessories:
+        from character.anatomy_alignment import apply_to_blender_object
+        # This is an OPT-IN IDENTITY-012 experiment. Same identity field as
+        # body, evaluated in the original baked BODY coordinate frame.
+        # Do not move original source anatomical objects or replace GLBs.
+        bpy.context.view_layer.update()
+        for cat,proxy in actual_assets.items():
+            alignment_audits[cat]=apply_to_blender_object(
+                body,proxy,source_points,recipe['head_shape'])
+            if not alignment_audits[cat]['mesh_vertices_unchanged']:
+                raise RuntimeError('E_ANATOMY_ALIGNMENT_CHANGED_TOPOLOGY_'+cat)
     RigService.ensure_armature_modifier(body,copy_rig)
     FaceService.load_targets(body,load_microsoft_visemes=False,
                              load_meta_visemes=True,load_arkit_faceunits=True)
@@ -211,6 +223,9 @@ def run(character,plan_file,output):
         'rig_joints':len(copy_rig.data.bones),
         'facial_morph_count':len(names),
         'facial_morph_names':names,
+        'anatomy_alignment_mode':(
+            'shared_identity_field' if align_accessories else 'original_mpfb_fit'),
+        'anatomy_alignment_audit':alignment_audits,
         'assets':[
             {'category':cat,'source_sha256':entry['sha256'],
              'mesh_vertices':len(actual_assets[cat].data.vertices),
@@ -237,5 +252,7 @@ if __name__=='__main__':
     parser.add_argument('--character',choices=('demo_head_a','demo_head_b'),required=True)
     parser.add_argument('--plan',type=Path,required=True)
     parser.add_argument('--out',type=Path,required=True)
+    parser.add_argument('--align-accessories',action='store_true',
+                        help='Apply same detailed identity field to copied eyes/teeth/tongue')
     args=parser.parse_args(sys.argv[sys.argv.index('--')+1:])
-    run(args.character,args.plan,args.out)
+    run(args.character,args.plan,args.out,align_accessories=args.align_accessories)

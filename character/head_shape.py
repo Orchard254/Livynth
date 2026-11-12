@@ -44,19 +44,24 @@ def _smoothstep(x):
     return t*t*(3-2*t)
 
 
-def displacement_field(points, controls):
+def displacement_field(points, controls, *, reference_vertices=None):
     """Return Nx3 deformation deltas in metres; never change the input.
 
-    Normalized reference is based on the source mesh height. Localized deformations
-    retain the same vertex indices and are mirror-symmetric across the x=0 plane.
-    The face points -Y in the verified MPFB neutral (not a universal convention).
+    A shared reference_vertices array lets a fitted accessory evaluate the
+    EXACT SAME spatial identity deformation in the BODY's coordinate system.
+    Without it, this retains the original verified body-only behavior.
+    The face points -Y in the verified MPFB neutral.
     """
     p = np.asarray(points, dtype=np.float64)
     if p.ndim != 2 or p.shape[1] != 3 or len(p) < 4 or not np.isfinite(p).all():
         raise InvalidHeadShape('E_HEAD_MESH_INPUT')
+    reference = p if reference_vertices is None else np.asarray(reference_vertices,dtype=np.float64)
+    if (reference.ndim != 2 or reference.shape[1] != 3 or len(reference) < 4
+        or not np.isfinite(reference).all()):
+        raise InvalidHeadShape('E_HEAD_REFERENCE_MESH')
     c = validate_controls(controls)
-    lo = p.min(axis=0)
-    hi = p.max(axis=0)
+    lo = reference.min(axis=0)
+    hi = reference.max(axis=0)
     h = float(hi[2] - lo[2])
     if not 1.0 <= h <= 2.5:
         raise InvalidHeadShape('E_HEAD_BODY_HEIGHT')
