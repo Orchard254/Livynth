@@ -83,6 +83,12 @@ Owner uploaded the real 540×960 `livynth_preview.png` after the STUDIO-006 prev
 
 **Next decisive experiment:** Windows Blender produce two GLBs and JSON reports from one template, run `identity_compare.py`, then inspect cheap front/profile and blink/jaw stills for both characters. If topology or animation changes, investigate MPFB macro/target compatibility before writing an image-fitting optimizer.
 
+## IDENTITY-002 — repeatable A/B Windows acceptance runner
+
+Added `tools/run_identity_ab.py`, a one-command local Blender A/B production+comparison driver. It uses the two validated manual recipes, finds Blender via Studio, creates a fresh timestamped directory without overwriting user files, exports both GLB/report pairs, and runs the strict geometry/topology/rig comparison. It stops on any failed subprocess or missing report.
+
+**Evidence:** 5/5 focused A/B orchestration tests passed in the authoring environment (distinct commands, duplicate recipe refusal, overwrite refusal, first-error stop, missing-report negative test). The combined local identity module+runner check passed **23/23** here. Full LIVYNTH suite and actual Windows Blender A/B two-export run remain **UNVERIFIED**. This does not fit reference images, and Character 001 likeness Phase-3 is still FAIL. Exact command: `python tools/run_identity_ab.py`.
+
 ## Explicit next acceptance gates
 
 1. **Owner Windows integrated smoke**: open the Studio, inspect actual neutral PNG, render a 30-frame MP4 and confirm it visually plays with audible speech; save `studio_run.json` and Blender diagnostics. Fail any stage that is black, visually incorrect, silent, or crashes. Repeat with `--mode demo` before release.
