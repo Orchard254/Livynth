@@ -15,13 +15,13 @@ def _make_glb(path,*,shift=0.0,zero_target=None):
     names=list(REQUIRED_MOTION)+[f'optional_{i:02d}' for i in range(67-len(REQUIRED_MOTION))]
     positions=[(i*0.002+shift,0.0,1.4) for i in range(count)]
     views=[];accessors=[];data=bytearray()
-    def add(values,fmt='f',type_name='VEC3',components=3):
+    def add(values,fmt='f',type_name='VEC3',components=3,component_type=5126):
         start=len(data)
         data.extend(struct.pack('<'+str(len(values)*components)+fmt,
                                 *(v for record in values for v in record)))
         views.append({'buffer':0,'byteOffset':start,'byteLength':len(data)-start})
         accessors.append({'bufferView':len(views)-1,
-                          'componentType':5126,'count':len(values),'type':type_name})
+                          'componentType':component_type,'count':len(values),'type':type_name})
         return len(accessors)-1
     pos=add(positions)
     targets=[]
@@ -29,14 +29,17 @@ def _make_glb(path,*,shift=0.0,zero_target=None):
         active=name in REQUIRED_MOTION and name!=zero_target
         delta=[(.002,0,0) if active and i<30 else (0,0,0) for i in range(count)]
         targets.append({'POSITION':add(delta)})
-    # QA checks skin/UV attribute existence; these attributes are semantically
-    # fake metadata in the test and MUST NOT be used as a true rig-motion demo.
+    # Build type-correct synthetic JOINTS_0, WEIGHTS_0 and TEXCOORD_0.
+    # The node hierarchy remains synthetic; this cannot prove a real motion.
+    joints=add([(0,1,2,3)]*count,fmt='H',type_name='VEC4',components=4,component_type=5123)
+    weights=add([(1,0,0,0)]*count,type_name='VEC4',components=4)
+    uv=add([(.5,.5)]*count,type_name='VEC2',components=2)
     js={'asset':{'version':'2.0'},'buffers':[{'byteLength':len(data)}],
         'bufferViews':views,'accessors':accessors,
         'meshes':[{'name':'head','extras':{'targetNames':names},
                    'primitives':[{'attributes':{'POSITION':pos,
-                                                'JOINTS_0':pos,'WEIGHTS_0':pos,
-                                                'TEXCOORD_0':pos},'targets':targets}]}],
+                                                'JOINTS_0':joints,'WEIGHTS_0':weights,
+                                                'TEXCOORD_0':uv},'targets':targets}]}],
         'nodes':[{'name':'root','children':[1]},{'name':'character','mesh':0,'skin':0}]
                 +[{'name':f'joint_{i}'} for i in range(163)],
         'skins':[{'joints':list(range(2,165))}],
