@@ -34,18 +34,19 @@ class AnatomyABError(ValueError):
     pass
 
 
-def plan(blender,asset_plan,output):
+def plan(blender,asset_plan,output,*,align_accessories=False):
     load_plan(asset_plan)
     output=Path(output).resolve()
     return [(char,[
         str(blender),'--background','--python',
         str(ROOT/'tools/mpfb_anatomy_ab_blender.py'),'--',
         '--character',char,'--plan',str(Path(asset_plan).resolve()),
-        '--out',str((output/char).resolve())])
+        '--out',str((output/char).resolve())]+(
+        ['--align-accessories'] if align_accessories else []))
         for char in CHARACTERS]
 
 
-def validate_character(report,folder,character):
+def validate_character(report,folder,character,*,expect_alignment=False):
     if (not isinstance(report,dict) or report.get('schema')!=SCHEMA or
         report.get('status')!='CAPTURED_ANATOMY_AB_REQUIRES_VISUAL_REVIEW' or
         report.get('character_id')!=character or
@@ -61,6 +62,19 @@ def validate_character(report,folder,character):
         not report.get('source_body_sha256') or not report.get('fitted_body_sha256') or
         not report.get('native_topology_sha256')):
         raise AnatomyABError('E_ANATOMY_AB_GEOMETRY_'+character)
+    if expect_alignment:
+        if report.get('anatomy_alignment_mode')!='shared_identity_field':
+            raise AnatomyABError('E_IDENTITY_FIELD_ALIGNMENT_NOT_APPLIED_'+character)
+        audits=report.get('anatomy_alignment_audit')
+        if not isinstance(audits,dict) or set(audits)!=set(REQUIRED):
+            raise AnatomyABError('E_IDENTITY_FIELD_ALIGNMENT_AUDIT_'+character)
+        for category,audit in audits.items():
+            if (audit.get('status')!='IDENTITY_FIELD_APPLIED_NOT_VISUALLY_APPROVED'
+                or audit.get('vertices',0)<100
+                or audit.get('mesh_vertices_unchanged') is not True
+                or audit.get('max_displacement_m',1)>0.025
+                or audit.get('max_storage_error_m',1)>0.000002):
+                raise AnatomyABError('E_IDENTITY_FIELD_ALIGNMENT_'+category)
     assets=report.get('assets')
     if (not isinstance(assets,list) or
         [a.get('category') for a in assets]!=list(REQUIRED) or
@@ -116,9 +130,9 @@ def _gallery():
     return ''.join(blocks)
 
 
-def run(blender,asset_plan,output,*,execute=subprocess.run):
+def run(blender,asset_plan,output,*,align_accessories=False,execute=subprocess.run):
     output=Path(output).resolve()
-    jobs=plan(blender,asset_plan,output)
+    jobs=plan(blender,asset_plan,output,align_accessories=align_accessories)
     if output.exists() or output.is_symlink():
         raise FileExistsError('E_ANATOMY_AB_OUTPUT_EXISTS')
     output.parent.mkdir(parents=True,exist_ok=True)
@@ -130,9 +144,12 @@ def run(blender,asset_plan,output,*,execute=subprocess.run):
         where=output/character
         report=json.loads((where/'anatomy_pose_report.json').read_text(encoding='utf-8'))
         report['_validated_folder']=str(where)
-        validate_character(report,where,character)
+        validate_character(report,where,character,expect_alignment=align_accessories)
         reports.append(report)
     final=compare_reports(*reports)
+    final['anatomy_alignment_mode']=(
+        'shared_identity_field' if align_accessories else 'original_mpfb_fit')
+    final['anatomy_alignment_quality']='PENDING_VISUAL_REVIEW'
     (output/'anatomy_ab_review.json').write_text(json.dumps(final,indent=2)+'\n',encoding='utf-8')
     (output/'index.html').write_text(_gallery(),encoding='utf-8')
     zip_path=output.with_suffix('.zip')
@@ -163,11 +180,13 @@ def main(argv=None):
     parser.add_argument('--plan',type=Path,
                         default=ROOT/'character/appearance/native_anatomy_demo.json')
     parser.add_argument('--out',type=Path)
+    parser.add_argument('--align-accessories',action='store_true',
+                        help='Opt-in aligned anatomy experiment; originals remain unchanged')
     args=parser.parse_args(argv)
     from livynth_studio import find_blender
     output=args.out or ROOT/'output'/'anatomy_ab_review'/datetime.now().strftime('%Y%m%d_%H%M%S_%f')
     try:
-        result,archive=run(find_blender(args.blender),args.plan,output)
+        result,archive=run(find_blender(args.blender),args.plan,output,align_accessories=args.align_accessories)
     except (OSError,ValueError,RuntimeError,subprocess.CalledProcessError) as exc:
         parser.exit(2,'LIVYNTH IDENTITY-011 FAILED: '+str(exc)+
                     '\nPartial evidence: '+str(output)+'\n')
