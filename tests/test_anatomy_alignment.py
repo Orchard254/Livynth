@@ -12,6 +12,24 @@ from character.identity_recipe import load_recipe
 
 ROOT=Path(__file__).resolve().parents[1]
 
+def fake_report(character,folder):
+    """Self-contained pre-render fixture for fail-closed alignment tests."""
+    return {
+        'schema':'livynth.anatomy-ab-render.v1',
+        'status':'CAPTURED_ANATOMY_AB_REQUIRES_VISUAL_REVIEW',
+        'character_id':character,'existing_glbs_modified':False,
+        'rig_joints':163,'facial_morph_count':67,
+        'native_body_vertices':13380,'native_quads':13378,
+        'source_body_sha256':'source','fitted_body_sha256':'different',
+        'native_topology_sha256':'topo',
+        'head_shape_audit':{'status':'PASS_LOCAL_QUADS_NOT_GLOBAL_INTERSECTIONS'},
+        'facial_morph_names':[f'key_{i}' for i in range(67)],
+        'assets':[{'category':cat,'mesh_vertices':250,
+                   'rigged_to_copied_armature':True}
+                  for cat in ('eyes','teeth','tongue')],
+        'images':[],
+    }
+
 
 class SharedCoordinateFieldTests(unittest.TestCase):
     @classmethod
@@ -97,7 +115,6 @@ class AlignmentRunnerTests(unittest.TestCase):
 
     def test_fake_alignment_audit_required(self):
         from tools.run_anatomy_ab_review import validate_character,AnatomyABError
-        from tests.test_anatomy_ab_review import fake_report
         folder=self.root/'demo_head_b'
         folder.mkdir()
         report=fake_report('demo_head_b',folder)
@@ -106,7 +123,6 @@ class AlignmentRunnerTests(unittest.TestCase):
 
     def test_fake_alignment_audit_cannot_claim_good_rigging_from_name(self):
         from tools.run_anatomy_ab_review import validate_character,AnatomyABError
-        from tests.test_anatomy_ab_review import fake_report
         folder=self.root/'demo_head_b'
         folder.mkdir()
         report=fake_report('demo_head_b',folder)
