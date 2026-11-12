@@ -115,5 +115,29 @@ class OralCorrectiveTests(unittest.TestCase):
         np.testing.assert_allclose(shift,[0,0,-.011],atol=1e-9)
 
 
+class OralRunnerFlagTests(unittest.TestCase):
+    def setUp(self):
+        self.plan=ROOT/'character/appearance/native_anatomy_demo.json'
+
+    def test_oral_correctives_opt_in_not_default(self):
+        from tools.run_anatomy_ab_review import plan
+        normal=plan('blender.exe',self.plan,ROOT/'output/test_default_oral')
+        experimental=plan('blender.exe',self.plan,ROOT/'output/test_corrective_oral',
+                          align_accessories=True,audit_oral_motion=True,
+                          oral_correctives=True)
+        self.assertTrue(all('--oral-correctives' not in command for _,command in normal))
+        self.assertTrue(all('--oral-correctives' in command for _,command in experimental))
+        self.assertTrue(all('--align-accessories' in command and '--audit-oral-motion' in command
+                            for _,command in experimental))
+
+    def test_cannot_run_correctives_without_motion_evidence(self):
+        from tools.run_anatomy_ab_review import run,AnatomyABError
+        with self.assertRaisesRegex(AnatomyABError,
+                                    'E_ORAL_CORRECTIVES_REQUIRE_ALIGNMENT_AND_AUDIT'):
+            run('fake',self.plan,ROOT/'output/unused_never_written',
+                oral_correctives=True,
+                execute=lambda *args,**kwargs: self.fail('Blender must not launch'))
+
+
 if __name__=='__main__':
     unittest.main()
