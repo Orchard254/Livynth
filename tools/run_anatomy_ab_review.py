@@ -34,7 +34,7 @@ class AnatomyABError(ValueError):
     pass
 
 
-def plan(blender,asset_plan,output,*,align_accessories=False,audit_oral_motion=False):
+def plan(blender,asset_plan,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False):
     load_plan(asset_plan)
     output=Path(output).resolve()
     return [(char,[
@@ -43,11 +43,12 @@ def plan(blender,asset_plan,output,*,align_accessories=False,audit_oral_motion=F
         '--character',char,'--plan',str(Path(asset_plan).resolve()),
         '--out',str((output/char).resolve())]+(
         ['--align-accessories'] if align_accessories else [])+(
-        ['--audit-oral-motion'] if audit_oral_motion else []))
+        ['--audit-oral-motion'] if audit_oral_motion else [])+(
+        ['--oral-correctives'] if oral_correctives else []))
         for char in CHARACTERS]
 
 
-def validate_character(report,folder,character,*,expect_alignment=False,expect_oral_motion=False):
+def validate_character(report,folder,character,*,expect_alignment=False,expect_oral_motion=False,expect_oral_correctives=False):
     if (not isinstance(report,dict) or report.get('schema')!=SCHEMA or
         report.get('status')!='CAPTURED_ANATOMY_AB_REQUIRES_VISUAL_REVIEW' or
         report.get('character_id')!=character or
@@ -102,6 +103,25 @@ def validate_character(report,folder,character,*,expect_alignment=False,expect_o
                 raise AnatomyABError('E_ORAL_MOTION_METRICS_'+pose+': '+str(exc)) from exc
             if recomputed!=measurement['status']:
                 raise AnatomyABError('E_ORAL_MOTION_STATUS_CONTRADICTION_'+pose)
+    if expect_oral_correctives:
+        audits=report.get('oral_corrective_audit')
+        if (report.get('oral_corrective_mode')!='MORPH_LINKED_LOWER_TEETH_AND_TONGUE'
+            or not isinstance(audits,dict) or set(audits)!={'jaw_open','viseme_aa'}):
+            raise AnatomyABError('E_ORAL_CORRECTIVE_AUDIT_MISSING_'+character)
+        for pose,values in audits.items():
+            if (values.get('anchor_count',0)<12
+                or values.get('coherent_downward_motion') is not True
+                or not set(('teeth','tongue')).issubset(values)):
+                raise AnatomyABError('E_ORAL_CORRECTIVE_ANCHORS_'+pose)
+            for category in ('teeth','tongue'):
+                record=values[category]
+                if (record.get('category')!=category or
+                    record.get('moved_vertices_gt_0_1_mm',0)<20 or
+                    record.get('max_displacement_m',0)<=0.0001 or
+                    record.get('max_displacement_m',1)>0.03):
+                    raise AnatomyABError('E_ORAL_CORRECTIVE_'+category+'_'+pose)
+        if not expect_oral_motion:
+            raise AnatomyABError('E_ORAL_CORRECTIVE_REQUIRES_MOTION_QA')
     assets=report.get('assets')
     if (not isinstance(assets,list) or
         [a.get('category') for a in assets]!=list(REQUIRED) or
@@ -157,9 +177,12 @@ def _gallery():
     return ''.join(blocks)
 
 
-def run(blender,asset_plan,output,*,align_accessories=False,audit_oral_motion=False,execute=subprocess.run):
+def run(blender,asset_plan,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False,execute=subprocess.run):
+    if oral_correctives and not (align_accessories and audit_oral_motion):
+        raise AnatomyABError('E_ORAL_CORRECTIVES_REQUIRE_ALIGNMENT_AND_AUDIT')
     output=Path(output).resolve()
-    jobs=plan(blender,asset_plan,output,align_accessories=align_accessories,audit_oral_motion=audit_oral_motion)
+    jobs=plan(blender,asset_plan,output,align_accessories=align_accessories,
+              audit_oral_motion=audit_oral_motion,oral_correctives=oral_correctives)
     if output.exists() or output.is_symlink():
         raise FileExistsError('E_ANATOMY_AB_OUTPUT_EXISTS')
     output.parent.mkdir(parents=True,exist_ok=True)
@@ -172,12 +195,16 @@ def run(blender,asset_plan,output,*,align_accessories=False,audit_oral_motion=Fa
         report=json.loads((where/'anatomy_pose_report.json').read_text(encoding='utf-8'))
         report['_validated_folder']=str(where)
         validate_character(report,where,character,expect_alignment=align_accessories,
-                           expect_oral_motion=audit_oral_motion)
+                           expect_oral_motion=audit_oral_motion,
+                           expect_oral_correctives=oral_correctives)
         reports.append(report)
     final=compare_reports(*reports)
     final['anatomy_alignment_mode']=(
         'shared_identity_field' if align_accessories else 'original_mpfb_fit')
     final['anatomy_alignment_quality']='PENDING_VISUAL_REVIEW'
+    final['oral_corrective_mode']=(
+        'MORPH_LINKED_LOWER_TEETH_AND_TONGUE' if oral_correctives else 'OFF')
+    final['oral_corrective_visual_quality']='PENDING_INDEPENDENT_REVIEW'
     if audit_oral_motion:
         final['oral_motion_diagnostic']={
             name:report['oral_motion_audit'] for name,report in zip(CHARACTERS,reports)}
@@ -217,6 +244,8 @@ def main(argv=None):
     parser.add_argument('--plan',type=Path,
                         default=ROOT/'character/appearance/native_anatomy_demo.json')
     parser.add_argument('--out',type=Path)
+    parser.add_argument('--oral-correctives',action='store_true',
+                        help='Opt-in source-jaw-derived lower-teeth/tongue morphs')
     parser.add_argument('--audit-oral-motion',action='store_true',
                         help='Measure evaluated jawOpen/AA tooth/tongue movement')
     parser.add_argument('--align-accessories',action='store_true',
@@ -227,7 +256,8 @@ def main(argv=None):
     try:
         result,archive=run(find_blender(args.blender),args.plan,output,
                            align_accessories=args.align_accessories,
-                           audit_oral_motion=args.audit_oral_motion)
+                           audit_oral_motion=args.audit_oral_motion,
+                           oral_correctives=args.oral_correctives)
     except (OSError,ValueError,RuntimeError,subprocess.CalledProcessError) as exc:
         parser.exit(2,'LIVYNTH IDENTITY-011 FAILED: '+str(exc)+
                     '\nPartial evidence: '+str(output)+'\n')

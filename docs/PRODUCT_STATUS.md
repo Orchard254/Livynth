@@ -401,6 +401,53 @@ body/teeth/tongue motion evidence. If the body morphs but oral meshes
 stay still, implement jaw/corrective retargeting with a separate gate.
 Do not weaken the strict 163/67, shape and static alignment checks.
 Image-driven five-view likeness remains Phase-3 FAIL.
+## IDENTITY-013 owner Windows jaw/tongue motion: FAIL (2026-11-12)
+
+Uploaded `20261112_081501_619229.zip` SHA256
+`3d5da86c4b927f71f06c29b80f877359ab8556948848498b595861e58c765aad`.
+All 16 manifest-listed ZIP files were independently verified.
+The real Blender evaluated-mesh motion reports show for BOTH heads:
+
+- `jawOpen`: 2,121 BODY vertices moved, maximum 32.927631mm;
+  teeth and tongue moved **0.0mm**.
+- `viseme_aa`: 1,967 BODY vertices moved, maximum 16.340069mm;
+  teeth and tongue moved **0.0mm**.
+- Four separate `FAIL_ORAL_ASSETS_STATIC_WHILE_BODY_MORPHS` outcomes.
+
+**Confirmed root cause:** attached oral assets receive the
+static identity alignment from IDENTITY-012 but are not driven
+by the BODY's jawOpen/AA shape-key values. Bone attachment alone
+cannot propagate another mesh's morph channel. The 163-bone
+and 67-body-morph contracts remain intact. Do not count this
+as successful lip-sync or natural mouth motion.
+
+## IDENTITY-014 — opt-in oral corrective morph experiment
+
+New `character/oral_correctives.py` extracts bounded lower-mouth
+translation from existing BODY jaw/AA shape-key geometry, then
+creates oral-only shape keys with matching channel names
+(`jawOpen`, `viseme_aa`) on the COPIED MPFB teeth/tongue.
+Tongue translates together; a conservative soft z-based mask
+moves lower dentition while preserving upper teeth as much as possible.
+The same weights are applied explicitly to body and oral assets.
+
+New runner flag `--oral-correctives` requires BOTH
+`--align-accessories` and `--audit-oral-motion`; the existing
+source GLBs, 163-joint rig, 67 body morphs and no-flag runs
+remain unchanged. A fresh 12-image ZIP and evaluated-mesh
+movement report let us reject bad jaw contact rather than
+claim success from nonzero numbers.
+
+12 pure-Python focused tests passed locally, including
+the original verified neutral mesh landmark-anchor case.
+13th optional owner-mesh test is skipped when the private
+NPZ ZIP is not present in a normal checkout.
+New Windows Blender corrective render/QA **NOT RUN**.
+Reference `docs/IDENTITY_ORAL_CORRECTIVES_014.md`.
+
+Next owner command: 
+`python tools/run_anatomy_ab_review.py --align-accessories --audit-oral-motion --oral-correctives`.
+Keep Character 001 five-angle photo-likeness Phase-3 FAIL.
 ## Explicit next acceptance gates
 
 1. **Owner Windows integrated smoke**: open the Studio, inspect actual neutral PNG, render a 30-frame MP4 and confirm it visually plays with audible speech; save `studio_run.json` and Blender diagnostics. Fail any stage that is black, visually incorrect, silent, or crashes. Repeat with `--mode demo` before release.
