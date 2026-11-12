@@ -45,7 +45,7 @@ def check(args):
         print('\n[livynth local] $', ' '.join(str(x) for x in command), flush=True)
         subprocess.run([str(v) for v in command], cwd=ROOT, check=True)
 
-    run([sys.executable, '-m', 'compileall', '-q', 'video', 'tests', 'tools'])
+    run([sys.executable, '-m', 'compileall', '-q', 'character', 'video', 'tests', 'tools'])
     run([sys.executable, '-m', 'unittest', 'discover', '-s', 'tests', '-v'])
     # The geometry suites live in sibling packages under geo/ (geo/tests,
     # geo/tests_hull, geo/tests_landmarks, geo/tests_calibration). Discovering
