@@ -48,6 +48,15 @@ class StudioTests(unittest.TestCase):
     def test_invalid_identity_recipe_rejected_before_subprocess(self):
         bad = self.folder/'fake_recipe.json'
         bad.write_text('{"schema":"fake"}',encoding='utf-8')
+        # Unknown schema must fail *schema* validation, before any Blender work.
+        with self.assertRaisesRegex(ValueError, 'E_RECIPE_SCHEMA'):
+            studio.make_plan(text='Demo.',mode='preview',output_dir=self.folder,
+                             blender='fake-blender',glb=None,audio=self.wav,
+                             identity_recipe=bad)
+
+    def test_valid_schema_with_missing_fields_rejected_before_subprocess(self):
+        bad = self.folder/'missing_fields_recipe.json'
+        bad.write_text('{"schema":"livynth.identity.recipe.v2"}',encoding='utf-8')
         with self.assertRaisesRegex(ValueError, 'E_RECIPE_FIELDS'):
             studio.make_plan(text='Demo.',mode='preview',output_dir=self.folder,
                              blender='fake-blender',glb=None,audio=self.wav,

@@ -309,19 +309,27 @@ def main() -> int:
     if identity_recipe and loaded.get("head_shape") and not report["errors"]:
         def _head_shape():
             import numpy as np
-            from character.head_shape import apply_head_shape
+            from character.head_shape import apply_head_shape, audit_realized_head_shape
             from character.identity_recipe import neutral_positions_sha256
             source = np.asarray([tuple(v.co) for v in new_bm.data.vertices],
                                 dtype=np.float64)
             quads = np.asarray([tuple(poly.vertices)
-                                for poly in new_bm.data.polygons],dtype=np.int64)
-            transformed, shape_audit = apply_head_shape(
-                source,quads,loaded["head_shape"])
-            shape_audit["source_positions_sha256"] = neutral_positions_sha256(source)
-            shape_audit["output_positions_sha256"] = neutral_positions_sha256(transformed)
-            for vertex, position in zip(new_bm.data.vertices, transformed):
+                                for poly in new_bm.data.polygons], dtype=np.int64)
+            planned, _planned_audit = apply_head_shape(
+                source, quads, loaded["head_shape"])
+            for vertex, position in zip(new_bm.data.vertices, planned):
                 vertex.co = tuple(float(v) for v in position)
             new_bm.data.update()
+            # Blender's mesh coordinates are float32 even though the numpy
+            # proposal was float64. Audit realized data, never the plan.
+            realized = np.asarray([tuple(v.co) for v in new_bm.data.vertices],
+                                  dtype=np.float64)
+            shape_audit = audit_realized_head_shape(
+                source, planned, realized, quads)
+            shape_audit["controls"] = loaded["head_shape"]
+            shape_audit["source_positions_sha256"] = neutral_positions_sha256(source)
+            shape_audit["planned_float64_sha256"] = neutral_positions_sha256(planned)
+            shape_audit["output_positions_sha256"] = neutral_positions_sha256(realized)
             report["identity_head_shape"] = shape_audit
         step("identity_head_shape", _head_shape)
         if report["errors"]:
