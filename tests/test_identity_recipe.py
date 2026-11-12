@@ -4,15 +4,18 @@ import tempfile
 import unittest
 from pathlib import Path
 from character.identity_recipe import (InvalidIdentityRecipe, load_recipe,validate_recipe,
-    apply_macro_overrides, recipe_sha256, neutral_positions_sha256)
+    apply_macro_overrides, recipe_sha256, neutral_positions_sha256, neutral_topology_sha256)
 from tools.identity_compare import compare,IdentityComparisonError
 ROOT=Path(__file__).resolve().parents[1]
 
 def sample(name,version,fingerprint,morphs=67):
     return {'assertions_passed':True,'errors':[],
             'identity_recipe':{'source':'manual_parameters','character_id':name,'sha256':version},
-            'neutral_identity_geometry':{'positions_sha256':fingerprint,'vertex_count':13380},
-            'glb_audit':{'joint_count':163,'morph_targets_in_exported_glb':morphs,'skin_present':True}}
+            'neutral_identity_geometry':{'positions_sha256':fingerprint,'topology_sha256':'topoA','vertex_count':13380,'quad_count':13378},
+            'glb_audit':{'joint_count':163,'morph_targets_in_exported_glb':morphs,'skin_present':True,
+                'target_names':['eyeBlinkLeft','eyeBlinkRight','viseme_aa'],
+                'skin_joint_names':['root','head','jaw'],
+                'character_primitives':[{'has_uv':True}]}}
 
 class RecipeTests(unittest.TestCase):
     def setUp(self):
@@ -61,6 +64,12 @@ class RecipeTests(unittest.TestCase):
         with self.assertRaisesRegex(InvalidIdentityRecipe,'E_POSITION_NONFINITE'):
             neutral_positions_sha256(coords[:3]+[(math.nan,0,1)])
 
+    def test_topology_hash_order_sensitive(self):
+        faces=[(0,1,2,3),(4,5,6,7),(8,9,10,11),(12,13,14,15)]
+        self.assertNotEqual(neutral_topology_sha256(faces),neutral_topology_sha256(faces[::-1]))
+        with self.assertRaisesRegex(InvalidIdentityRecipe,'E_TOPOLOGY_QUADS'):
+            neutral_topology_sha256(faces[:3]+[(1,2,3)])
+
 class ComparisonTests(unittest.TestCase):
     def test_distinct_verified_structure(self):
         self.assertIn('NOT_LIKENESS',compare(sample('a','a','hashA'),sample('b','b','hashB'))['status'])
@@ -70,6 +79,16 @@ class ComparisonTests(unittest.TestCase):
     def test_lost_face_morph_fails(self):
         with self.assertRaisesRegex(IdentityComparisonError,'E_RIG_MORPH'):
             compare(sample('a','a','one'),sample('b','b','two',morphs=66))
+    def test_different_topology_fails(self):
+        a=sample('a','a','one');b=sample('b','b','two')
+        b['neutral_identity_geometry']['topology_sha256']='different'
+        with self.assertRaisesRegex(IdentityComparisonError,'E_DIFFERENT_TOPOLOGY'):
+            compare(a,b)
+    def test_different_target_names_fails(self):
+        a=sample('a','a','one');b=sample('b','b','two')
+        b['glb_audit']['target_names']=['other']
+        with self.assertRaisesRegex(IdentityComparisonError,'E_MORPH_NAME_MISMATCH'):
+            compare(a,b)
     def test_failed_export_fails(self):
         a=sample('a','a','one');a['assertions_passed']=False
         with self.assertRaisesRegex(IdentityComparisonError,'E_EXPORT_AUDIT'):
