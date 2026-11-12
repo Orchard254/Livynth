@@ -123,7 +123,7 @@ def _audit_jaw_and_visemes(body,assets,*,use_oral_correctives=False):
     return reports
 
 
-def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False,mhclo_dentition=False,rigged_seam_probe=False):
+def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False,mhclo_dentition=False,rigged_seam_probe=False,seam_jaw_stills=False):
     import bpy
     import numpy as np
     from bl_ext.user_default.mpfb.services import (
@@ -138,6 +138,10 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
     if rigged_seam_probe and any((
             align_accessories,audit_oral_motion,oral_correctives,mhclo_dentition)):
         raise ValueError('E_RIGGED_SEAM_PROBE_ISOLATED_ONLY')
+    if seam_jaw_stills and (character!='demo_head_a' or rigged_seam_probe or
+            not all((align_accessories,audit_oral_motion,oral_correctives,
+                     mhclo_dentition))):
+        raise ValueError('E_ID022_REQUIRES_HEAD_A_AND_VERIFIED_ORAL_PIPELINE')
     output=Path(output).resolve()
     if output.exists() or output.is_symlink():
         raise FileExistsError('E_ANATOMY_POSE_OUTPUT_EXISTS')
@@ -250,6 +254,7 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
 
     dental_mask=None
     dental_mapping_audit=None
+    seam_copy_audit=None
     if mhclo_dentition:
         from bl_ext.user_default.mpfb.entities.clothes.mhclo import Mhclo
         from character.mhclo_dentition import classify_dentition_mhclo
@@ -271,10 +276,16 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
                         for x in resolved if x['category']=='teeth')
         metadata=Mhclo()
         metadata.load(tooth_path)
-        dental_mask,dental_mapping_audit=classify_dentition_mhclo(
-            len(tooth_copy.data.vertices),metadata.verts,
-            [tuple(poly.vertices) for poly in tooth_copy.data.polygons],
-            source_vertex_count=len(source.data.vertices))
+        if seam_jaw_stills:
+            from tools.mhclo_seam_render_copy import prepare_seamed_render_copy
+            dental_mask,dental_mapping_audit,seam_copy_audit=(
+                prepare_seamed_render_copy(
+                    tooth_original,tooth_copy,copy_rig,metadata))
+        else:
+            dental_mask,dental_mapping_audit=classify_dentition_mhclo(
+                len(tooth_copy.data.vertices),metadata.verts,
+                [tuple(poly.vertices) for poly in tooth_copy.data.polygons],
+                source_vertex_count=len(source.data.vertices))
         dental_mapping_audit['pinned_asset_sha256']=next(
             x['sha256'] for x in resolved if x['category']=='teeth')
         dental_mapping_audit['copied_vertex_order_error_m']=round(
@@ -288,6 +299,18 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
         remove_helpers=True,also_proxy=True)
     if len(body.data.vertices)!=13380 or len(body.data.polygons)!=13378:
         raise RuntimeError('E_ANATOMY_NATIVE_TOPOLOGY_CHANGED')
+    if seam_jaw_stills:
+        if (len(actual_assets['teeth'].data.vertices)!=3868 or
+                len(actual_assets['teeth'].data.polygons)!=3540):
+            raise RuntimeError('E_ID022_TOOTH_MESH_CHANGED_DURING_BODY_BAKE')
+        # The MPFB baking stage must not reintroduce a cross-jaw polygon.
+        mask_after,audit_after=classify_dentition_mhclo(
+            3868,metadata.verts,
+            [tuple(f.vertices) for f in actual_assets['teeth'].data.polygons],
+            source_vertex_count=len(source.data.vertices))
+        if (audit_after['mixed_jaw_faces']!=0 or
+                not (mask_after==dental_mask).all()):
+            raise RuntimeError('E_ID022_POST_BAKE_MHCLO_MAPPING')
     source_points=np.asarray([tuple(v.co) for v in body.data.vertices],dtype=np.float64)
     quads=np.asarray([tuple(p.vertices) for p in body.data.polygons],dtype=np.int64)
     planned,_=apply_head_shape(source_points,quads,recipe['head_shape'])
@@ -348,15 +371,33 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
         body,actual_assets,use_oral_correctives=oral_correctives)
         if audit_oral_motion else None)
 
+    if seam_jaw_stills and (
+            not isinstance(oral_motion_audit,dict) or
+            oral_motion_audit.get('jaw_open',{}).get('status')!=
+                'ORAL_MOTION_PRESENT_NOT_VISUALLY_APPROVED'):
+        (output/'seam_jaw_gate_failure.json').write_text(
+            json.dumps({'status':'FAIL_ID022_ORAL_MOTION_BEFORE_RENDER',
+                        'oral_motion_audit':oral_motion_audit,
+                        'seam_copy_audit':seam_copy_audit},
+                       indent=2)+'\n',encoding='utf-8')
+        raise RuntimeError('E_ID022_ORAL_MOTION_BEFORE_RENDER')
     images=[]
-    for label,weights in POSES.items():
-        _set_morphs(body,weights,oral_assets=controlled)
-        images.append(_render(scene,body,'front_'+label,0,output))
-    _set_morphs(body,POSES['jaw_open'],oral_assets=controlled)
-    images.append(_render(scene,body,'three_quarter_jaw_open',38,output))
+    if seam_jaw_stills:
+        # Only two front stills for a first owner visual gate. No A/B batch.
+        for label in ('neutral','jaw_open'):
+            _set_morphs(body,POSES[label],oral_assets=controlled)
+            images.append(_render(scene,body,'front_'+label,0,output))
+    else:
+        for label,weights in POSES.items():
+            _set_morphs(body,weights,oral_assets=controlled)
+            images.append(_render(scene,body,'front_'+label,0,output))
+        _set_morphs(body,POSES['jaw_open'],oral_assets=controlled)
+        images.append(_render(scene,body,'three_quarter_jaw_open',38,output))
     report={
         'schema':SCHEMA,'character_id':character,
-        'status':'CAPTURED_ANATOMY_AB_REQUIRES_VISUAL_REVIEW',
+        'status':('CAPTURED_HEAD_A_SEAM_JAW_STILLS_PENDING_VISUAL_REVIEW'
+                  if seam_jaw_stills else
+                  'CAPTURED_ANATOMY_AB_REQUIRES_VISUAL_REVIEW'),
         'blender_version':bpy.app.version_string,
         'source_body_sha256':neutral_positions_sha256(source_points),
         'fitted_body_sha256':neutral_positions_sha256(actual),
@@ -376,6 +417,7 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
         'dental_segmentation_mode':('MHCLO_HM08_UPPER_LOWER_HELPERS'
                                     if mhclo_dentition else 'LEGACY_Z_SPLIT'),
         'dental_mapping_audit':dental_mapping_audit,
+        'seamed_render_copy_audit':seam_copy_audit,
         'oral_motion_audit':oral_motion_audit,
         'oral_motion_status':('RECORDED_DO_NOT_INFER_VISUAL_APPROVAL'
                               if oral_motion_audit else 'NOT_RUN'),
@@ -390,6 +432,10 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
         'eyes_teeth_tongue_follow_expression':'PENDING_VISUAL_REVIEW',
         'natural_animation':'NOT_TESTED',
         'character_001_likeness':'NOT_TESTED',
+        'render_scope':('HEAD_A_FRONT_NEUTRAL_AND_JAW_OPEN_ONLY'
+                        if seam_jaw_stills else 'STANDARD_AB_POSES'),
+        'dental_visual_quality':'PENDING_INDEPENDENT_REVIEW',
+        'full_character_glb_export':'NOT_TESTED',
     }
     (output/'anatomy_pose_report.json').write_text(
         json.dumps(report,indent=2)+'\n',encoding='utf-8')
@@ -407,6 +453,8 @@ if __name__=='__main__':
     parser.add_argument('--out',type=Path,required=True)
     parser.add_argument('--rigged-seam-probe',action='store_true',
                         help='IDENTITY-021 disposable rigged-teeth geometry check; no render')
+    parser.add_argument('--seam-jaw-stills',action='store_true',
+                        help='IDENTITY-022 opt-in Head A two front stills, cut only copied teeth')
     parser.add_argument('--mhclo-dentition',action='store_true',
                         help='Use original MPFB teeth helper mapping instead of visual Z split')
     parser.add_argument('--oral-correctives',action='store_true',
@@ -419,4 +467,5 @@ if __name__=='__main__':
     run(args.character,args.plan,args.out,align_accessories=args.align_accessories,
         audit_oral_motion=args.audit_oral_motion,oral_correctives=args.oral_correctives,
         mhclo_dentition=args.mhclo_dentition,
-        rigged_seam_probe=args.rigged_seam_probe)
+        rigged_seam_probe=args.rigged_seam_probe,
+        seam_jaw_stills=args.seam_jaw_stills)
