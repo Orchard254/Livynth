@@ -89,3 +89,14 @@ def neutral_positions_sha256(positions):
         dig.update(struct.pack('<ddd',*xyz)); count+=1
     if count < 4: raise InvalidIdentityRecipe('E_POSITION_EMPTY')
     return dig.hexdigest()
+
+def neutral_topology_sha256(polygons):
+    """Stable fingerprint of the baked native quad face vertex indices."""
+    dig=hashlib.sha256(); count=0
+    for face in polygons:
+        indices=tuple(int(i) for i in face)
+        if len(indices)!=4 or any(i<0 for i in indices):
+            raise InvalidIdentityRecipe('E_TOPOLOGY_QUADS')
+        dig.update(struct.pack('<IIII',*indices));count+=1
+    if count<4: raise InvalidIdentityRecipe('E_TOPOLOGY_EMPTY')
+    return dig.hexdigest()
