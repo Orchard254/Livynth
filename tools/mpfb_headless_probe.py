@@ -39,6 +39,9 @@ import time
 SCRIPT_DIR = os.path.dirname(os.path.abspath(globals().get("__file__", "./")))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
+REPO_DIR = os.path.dirname(SCRIPT_DIR)
+if REPO_DIR not in sys.path:
+    sys.path.insert(0, REPO_DIR)  # character/ identity recipe shared with CPU tests
 
 
 def _parse_args():
@@ -46,6 +49,10 @@ def _parse_args():
     out = None
     json_out = None
     rig = "default"
+    stage1_template = None
+    stage1_constraints = None
+    stage1_neutral_dump = None
+    identity_recipe = None
     i = 0
     while i < len(argv):
         if argv[i] == "--out" and i + 1 < len(argv):
@@ -60,8 +67,30 @@ def _parse_args():
             rig = argv[i + 1]
             i += 2
             continue
+        if argv[i] == "--stage1-template" and i + 1 < len(argv):
+            stage1_template = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--stage1-constraints" and i + 1 < len(argv):
+            stage1_constraints = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--stage1-neutral-dump" and i + 1 < len(argv):
+            stage1_neutral_dump = argv[i + 1]
+            i += 2
+            continue
+        if argv[i] == "--identity-recipe" and i + 1 < len(argv):
+            identity_recipe = argv[i + 1]
+            i += 2
+            continue
         i += 1
-    return out, json_out, rig
+    if stage1_template and stage1_constraints:
+        raise ValueError("--stage1-template and --stage1-constraints are exclusive")
+    if stage1_constraints and stage1_neutral_dump:
+        raise ValueError("Neutral mesh dump must be captured BEFORE a fit; do not combine with constraints")
+    if identity_recipe and stage1_constraints:
+        raise ValueError("Identity recipe and experimental Stage-1 constraints cannot be combined until both transforms are audited")
+    return out, json_out, rig, stage1_template, stage1_constraints, stage1_neutral_dump, identity_recipe
 
 
 def _clear_scene():
@@ -92,7 +121,7 @@ def _stash_armature_modifier(obj):
 
 
 def main() -> int:
-    out_glb, out_json, rig_name = _parse_args()
+    out_glb, out_json, rig_name, stage1_template, stage1_constraints, stage1_neutral_dump, identity_recipe = _parse_args()
 
     import bpy
     from bl_ext.user_default.mpfb.services import (
@@ -137,14 +166,30 @@ def main() -> int:
 
     # ---- 1. create the human from the CC0 basemesh -----------------------
     macro = TargetService.get_default_macro_info_dict()
-    # Character 001 is an adult man; use the closest available macro preset.
-    macro["race"] = {"african": 0.0, "asian": 0.0, "caucasian": 1.0}
-    macro["gender"] = 1.0        # MakeHuman convention: 1.0 = male
-    macro["age"] = 0.5
-    macro["muscle"] = 0.5
-    macro["weight"] = 0.5
-    macro["proportions"] = 0.5
-    macro["height"] = 0.5
+    if identity_recipe:
+        # Reusable identity control BEFORE baking and BEFORE facial morphs.
+        # No image inference or source-GLB modification occurs here.
+        from character.identity_recipe import (
+            load_recipe, recipe_sha256, apply_macro_overrides)
+        loaded = load_recipe(identity_recipe)  # strict fail-closed JSON
+        macro = apply_macro_overrides(macro, loaded["macros"])
+        report["identity_recipe"] = {
+            "character_id": loaded["character_id"],
+            "source": loaded["source"],
+            "sha256": recipe_sha256(loaded),
+            "path": os.path.abspath(identity_recipe),
+            "identity_likeness": "UNVERIFIED",
+            "parameters": loaded["macros"],
+        }
+    else:
+        # Preserve the tested Character 001 placeholder's original defaults.
+        macro["race"] = {"african": 0.0, "asian": 0.0, "caucasian": 1.0}
+        macro["gender"] = 1.0        # MPFB: 1.0 = male
+        macro["age"] = 0.5
+        macro["muscle"] = 0.5
+        macro["weight"] = 0.5
+        macro["proportions"] = 0.5
+        macro["height"] = 0.5
     report["macro"] = macro
 
     basemesh = [None]
@@ -257,6 +302,89 @@ def main() -> int:
             new_bm, bake_masks=True, bake_subdiv=True,
             remove_helpers=True, also_proxy=True)
     step("bake_modifiers_remove_helpers", _bake_mods)
+
+    # Detailed identity shape: same native quad connectivity, adjusted vertex
+    # positions before ARKit/Meta keys are constructed.  This is opt-in v2
+    # and never changes the existing no-recipe Stage-0 baseline.
+    if identity_recipe and loaded.get("head_shape") and not report["errors"]:
+        def _head_shape():
+            import numpy as np
+            from character.head_shape import apply_head_shape, audit_realized_head_shape
+            from character.identity_recipe import neutral_positions_sha256
+            source = np.asarray([tuple(v.co) for v in new_bm.data.vertices],
+                                dtype=np.float64)
+            quads = np.asarray([tuple(poly.vertices)
+                                for poly in new_bm.data.polygons], dtype=np.int64)
+            planned, _planned_audit = apply_head_shape(
+                source, quads, loaded["head_shape"])
+            for vertex, position in zip(new_bm.data.vertices, planned):
+                vertex.co = tuple(float(v) for v in position)
+            new_bm.data.update()
+            # Blender's mesh coordinates are float32 even though the numpy
+            # proposal was float64. Audit realized data, never the plan.
+            realized = np.asarray([tuple(v.co) for v in new_bm.data.vertices],
+                                  dtype=np.float64)
+            shape_audit = audit_realized_head_shape(
+                source, planned, realized, quads)
+            shape_audit["controls"] = loaded["head_shape"]
+            shape_audit["source_positions_sha256"] = neutral_positions_sha256(source)
+            shape_audit["planned_float64_sha256"] = neutral_positions_sha256(planned)
+            shape_audit["output_positions_sha256"] = neutral_positions_sha256(realized)
+            report["identity_head_shape"] = shape_audit
+        step("identity_head_shape", _head_shape)
+        if report["errors"]:
+            report["fatal"] = "Identity head fit rejected; GLB not exported"
+            text = json.dumps(report, indent=2)
+            print(text)
+            if out_json:
+                os.makedirs(os.path.dirname(os.path.abspath(out_json)), exist_ok=True)
+                with open(out_json,"w",encoding="utf-8") as fh:
+                    fh.write(text)
+            return 2
+
+    if identity_recipe and not report["errors"] and new_bm is not None:
+        from character.identity_recipe import (
+            neutral_positions_sha256, neutral_topology_sha256)
+        baked = new_bm.data.vertices
+        quads = new_bm.data.polygons
+        report["neutral_identity_geometry"] = {
+            "vertex_count": len(baked),
+            "quad_count": len(quads),
+            "positions_sha256": neutral_positions_sha256(v.co for v in baked),
+            "topology_sha256": neutral_topology_sha256(p.vertices for p in quads),
+            "fingerprint_basis": "baked-native-indices-before-arkit",
+        }
+
+    # ---- OPTIONAL Stage-1 geometric fit, BEFORE facial targets ----------
+    # Without these flags the Stage-0 baseline execution path is unchanged.
+    # A failed fit must NEVER produce a GLB named as a fitted candidate.
+    if stage1_template or stage1_constraints or stage1_neutral_dump:
+        import stage1_blender_bridge
+        if stage1_template:
+            def _template():
+                report["stage1"] = stage1_blender_bridge.write_template(
+                    new_bm, stage1_template)
+            step("stage1_template", _template)
+        if stage1_neutral_dump:
+            import stage1_neutral_dump as neutral_dump_module
+            def _capture():
+                report["neutral_dump"] = neutral_dump_module.write_neutral_dump(
+                    new_bm, stage1_neutral_dump)
+            step("stage1_neutral_dump", _capture)
+        if stage1_constraints:
+            def _stage1():
+                report["stage1"] = stage1_blender_bridge.apply_constraints(
+                    new_bm, stage1_constraints)
+            step("stage1_fit", _stage1)
+        if report["errors"]:
+            report["fatal"] = "Stage-1 request rejected; no GLB exported"
+            text = json.dumps(report, indent=2)
+            print(text)
+            if out_json:
+                os.makedirs(os.path.dirname(os.path.abspath(out_json)), exist_ok=True)
+                with open(out_json, "w", encoding="utf-8") as fh:
+                    fh.write(text)
+            return 2
 
     def _restore():
         if export_arm is not None:

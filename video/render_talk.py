@@ -76,8 +76,20 @@ def shot_settings(height, preset):
     """Portrait framing in fraction-of-character-height units (pure, testable)."""
     if not 0.1 < height < 10:
         raise ValueError('Unexpected full-body height')
-    return {'camera_drop':0.11, 'ortho_scale':0.29} if preset == 'studio' else {
+    # Review of actual 540x960 smoke frames: prior crop placed the crown at
+    # y~110 but left the face small, with excessive chest filling the portrait.
+    # Reduce ortho scale and raise the aim to keep the crown from clipping.
+    # This is a diagnostic shot; confirm on Windows before a full render.
+    return {'camera_drop':0.06, 'ortho_scale':0.215} if preset == 'studio' else {
         'camera_drop':0.19, 'ortho_scale':0.48}
+
+
+def studio_palette():
+    """Diagnostic clay/garment colors only; not Character 001 texture/identity."""
+    return {
+        'skin': (0.59, 0.40, 0.32, 1.0),
+        'shirt': (0.025, 0.055, 0.105, 1.0),
+    }
 
 
 def shirt_cutoff(x, z, horizontal_center, crown, height):
@@ -89,7 +101,10 @@ def shirt_cutoff(x, z, horizontal_center, crown, height):
     if height <= 0:
         raise ValueError('Height must be positive')
     shoulder = min(1.0, abs(x-horizontal_center)/(0.22*height))
-    neckline = crown - height*(0.22 - 0.055*shoulder)
+    # Previous cut (0.22 of whole-body height at the center) was almost
+    # entirely below the visible area of the approved close-up camera. This
+    # raises the neck opening without coloring the face or ear region.
+    neckline = crown - height*(0.17 - 0.045*shoulder)
     return z < neckline
 
 
@@ -142,26 +157,112 @@ def add_preview_shirt(meshes):
     minimum, maximum = bounds(meshes)
     h = maximum[2]-minimum[2]
     cx = (minimum[0]+maximum[0])*0.5
-    mat = bpy.data.materials.new('Livynth Navy Preview Shirt')
-    mat.use_nodes = True
-    bsdf = mat.node_tree.nodes.get('Principled BSDF')
-    if bsdf:
-        bsdf.inputs['Base Color'].default_value = (0.025,0.055,0.105,1.0)
-        bsdf.inputs['Roughness'].default_value = 0.88
-        bsdf.inputs['Metallic'].default_value = 0.0
-    body.data.materials.append(mat)
-    shirt_index = len(body.data.materials)-1
+    # The neutral MPFB export arrives with near-uniform dark-blue material.
+    # Assign distinct warm clay and navy shirt material on this imported copy
+    # so geometry, mouth motion and neckline remain visible for diagnosis.
+    # No textures or likeness are implied and the original GLB is untouched.
+    palette = studio_palette()
+    indexes = {}
+    for role, label, roughness in (
+        ('skin', 'Livynth Neutral Skin Clay', 0.72),
+        ('shirt', 'Livynth Navy Preview Shirt', 0.88),
+    ):
+        mat = bpy.data.materials.new(label)
+        mat.use_nodes = True
+        mat.diffuse_color = palette[role]
+        bsdf = mat.node_tree.nodes.get('Principled BSDF')
+        if bsdf:
+            bsdf.inputs['Base Color'].default_value = palette[role]
+            bsdf.inputs['Roughness'].default_value = roughness
+            bsdf.inputs['Metallic'].default_value = 0.0
+        body.data.materials.append(mat)
+        indexes[role] = len(body.data.materials)-1
+        # Imported glTF object slots can be linked to object overrides;
+        # explicitly bind our diagnostic materials to mesh DATA slots.
+        slot = body.material_slots[indexes[role]]
+        slot.link = 'DATA'
+        slot.material = mat
     vertices = body.data.vertices
     matrix = body.matrix_world
     assigned = 0
+    clay_faces = 0
     for face in body.data.polygons:
         # Average corner positions, not face.center (which is mesh local).
         coords = [matrix @ vertices[idx].co for idx in face.vertices]
         c = sum(coords,Vector((0,0,0)))/len(coords)
         if shirt_cutoff(c.x,c.z,cx,maximum[2],h):
-            face.material_index = shirt_index
+            face.material_index = indexes['shirt']
             assigned += 1
-    print(f'[Livynth] Preview wardrobe: recolored {assigned} torso/arm polygons; no geometry changed')
+        else:
+            face.material_index = indexes['skin']
+            clay_faces += 1
+    if not assigned or not clay_faces:
+        raise RuntimeError('Studio preview material mask has no shirt or visible skin')
+    body.data.update()
+    bpy.context.view_layer.update()
+    print(f'[Livynth] Studio diagnostic materials: {clay_faces} clay and '
+          f'{assigned} navy-shirt polygons; no geometry changed')
+
+
+def assess_preview_wardrobe(face_rgb, torso_rgb):
+    """Check *visible* blue-shirt contrast, not only Blender material indices.
+
+    RGB can be 0..1 linear or 0..255 display values. This is a diagnostic
+    presentation check, not a photorealism, identity or segmentation metric.
+    """
+    if len(face_rgb) != 3 or len(torso_rgb) != 3:
+        raise ValueError('Expected RGB triples for preview contrast')
+    if any(not math.isfinite(float(v)) or float(v) < 0 for v in (*face_rgb, *torso_rgb)):
+        raise ValueError('Invalid pixel channels for preview contrast')
+    def luminance(rgb):
+        return sum(float(v)*w for v,w in zip(rgb,(0.2126,0.7152,0.0722)))
+    face_l = luminance(face_rgb)
+    torso_l = luminance(torso_rgb)
+    relative = torso_l / max(face_l, 1e-5)
+    navy_blue = float(torso_rgb[2]) >= 1.15 * max(float(torso_rgb[0]),1e-5)
+    return {
+        'status': 'PASS_VISIBLE_NAVY_SHIRT' if relative <= 0.72 and navy_blue
+                  else 'FAIL_INVISIBLE_SHIRT',
+        'torso_to_face_luminance': round(relative,4),
+        'torso_blue_over_red': round(float(torso_rgb[2]) / max(float(torso_rgb[0]),1e-5),4),
+    }
+
+
+def verify_rendered_preview_wardrobe(render_path):
+    """Load a *rendered* PNG through Blender and check the visible shirt.
+
+    Samples the forehead and lower torso in the controlled portrait preset.
+    The still remains on disk for debugging when the test fails.
+    """
+    import bpy
+    image = bpy.data.images.load(str(Path(render_path).resolve()), check_existing=False)
+    try:
+        width,height = image.size
+        if width < 128 or height < 128:
+            raise RuntimeError('Studio preview too small to verify shirt contrast')
+        pixels = image.pixels
+        def center_patch(nx, ny):
+            # Blender image pixel origin is lower left; the UI image origin
+            # is upper left. Average a 5x5 patch to avoid compression noise.
+            x = int(nx * (width-1))
+            y = int((1-ny) * (height-1))
+            sums = [0.0, 0.0, 0.0]
+            for dy in range(-2,3):
+                for dx in range(-2,3):
+                    ix = max(0,min(width-1,x+dx))
+                    iy = max(0,min(height-1,y+dy))
+                    off = (iy*width+ix)*4
+                    for ch in range(3):
+                        sums[ch] += float(pixels[off+ch])
+            return tuple(s / 25 for s in sums)
+        check = assess_preview_wardrobe(center_patch(0.5,0.36),center_patch(0.5,0.84))
+    finally:
+        bpy.data.images.remove(image)
+    print('[Livynth] Rendered wardrobe pixel QA: ' + json.dumps(check,sort_keys=True))
+    if check['status'] != 'PASS_VISIBLE_NAVY_SHIRT':
+        raise RuntimeError('Studio preview shirt invisible in rendered pixels; '
+                           'inspect saved PNG, not only polygon material counts')
+    return check
 
 
 def set_test_pose(meshes, weights):
@@ -199,6 +300,8 @@ def render_preview_set(scene, meshes, out):
         file = out.with_name(out.stem+'_'+name+'.png')
         scene.render.filepath = str(file.resolve())
         bpy.ops.render.render(write_still=True)
+        if name == 'neutral':
+            verify_rendered_preview_wardrobe(file)
         print(f'[Livynth] Rendered diagnostic {name}: {file}')
 
 
@@ -223,7 +326,7 @@ def camera_and_lights(scene, meshes, front, preset):
     cam_data.keyframe_insert(data_path='ortho_scale',frame=1)
     cam_data.ortho_scale *= 0.975
     cam_data.keyframe_insert(data_path='ortho_scale',frame=scene.frame_end)
-    strengths = (255,105,190) if preset == 'studio' else (450,230,390)
+    strengths = (370,195,285) if preset == 'studio' else (450,230,390)
     for name, offset, strength, size in [
         ('Key',(-0.8,-1.4,1.4),strengths[0],1.7),
         ('Fill',(0.9,-1.2,0.6),strengths[1],1.9),
@@ -260,7 +363,7 @@ def camera_and_lights(scene, meshes, front, preset):
         emission.inputs['Color'].default_value=(0.045,0.065,0.09,1.0)
         emission.inputs['Strength'].default_value=1.0
         mat.node_tree.links.new(emission.outputs[0],output.inputs['Surface'])
-        scene.view_settings.exposure=-0.4
+        scene.view_settings.exposure=0.05
         if scene.world:
             scene.world.use_nodes=True
             bg=scene.world.node_tree.nodes.get('Background')
@@ -271,7 +374,12 @@ def camera_and_lights(scene, meshes, front, preset):
 
 def include_narration(scene, path):
     editor=scene.sequence_editor_create()
-    strips=getattr(editor,'strips',None) or getattr(editor,'sequences',None)
+    # The Blender 4.5 SequenceEditor.strips collection is empty before the
+    # first sound is inserted. An empty bpy_prop_collection can be false-y,
+    # so never use `or` here: it mistakes a valid empty collection for None.
+    strips=getattr(editor,'strips',None)
+    if strips is None:  # Blender versions exposing the older API
+        strips=getattr(editor,'sequences',None)
     if strips is None:
         raise RuntimeError('Blender sequence editor missing strips collection')
     sound=strips.new_sound('Livynth Voice',str(path.resolve()),channel=1,frame_start=1)
@@ -328,6 +436,8 @@ def main(args):
         scene.render.image_settings.file_format='PNG'
         scene.render.filepath=str(args.out.with_suffix('.png').resolve())
         bpy.ops.render.render(write_still=True)
+        if args.preset == 'studio':
+            verify_rendered_preview_wardrobe(scene.render.filepath)
     else:
         include_narration(scene,args.audio)
         scene.render.image_settings.file_format='FFMPEG'

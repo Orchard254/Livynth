@@ -337,19 +337,28 @@ for name in VIEWS:
     np.save(OUT / ("normal_%s.npy" % name), rast["normal"].astype(np.float32))
 
     if "wire" in PASSES:
+        previous_film = scene.render.film_transparent
         try:
             set_material("clay")
+            scene.render.film_transparent = False
             render_to(OUT / ("wire_%s.png" % name), freestyle=True)
         except Exception as exc:
             print("[gate-render] wire pass failed:", repr(exc))
+        finally:
+            scene.render.film_transparent = previous_film
     if "wireframe" in PASSES:
+        previous_film = scene.render.film_transparent
         try:
             build_wireframe_copy()
             set_wire_visible(True)
+            # Black mesh lines need an opaque neutral backdrop to be
+            # inspectable in dark-mode viewers and the sealed review bundle.
+            scene.render.film_transparent = False
             render_to(OUT / ("wireframe_%s.png" % name))
-            set_wire_visible(False)
         except Exception as exc:
             print("[gate-render] wireframe pass failed:", repr(exc))
+        finally:
+            scene.render.film_transparent = previous_film
             set_wire_visible(False)
     if "textured" in PASSES:
         try:

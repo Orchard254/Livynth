@@ -71,22 +71,40 @@ def load_glb(path):
 
 
 def read_accessor(js, bin_chunk, index):
+    """Read dense or glTF sparse accessors without silently dropping morph data."""
     acc = js["accessors"][index]
-    if "bufferView" not in acc:
-        # Zero-filled accessor (no backing buffer view): glTF allows this for
-        # morph targets that only carry NORMAL, and some exporters emit it.
-        ncomp = TYPESTRUCT[acc["type"]]
-        return [tuple([0.0] * ncomp) for _ in range(acc["count"])]
-    bv = js["bufferViews"][acc["bufferView"]]
-    base = bv.get("byteOffset", 0) + acc.get("byteOffset", 0)
     fmt, size = NUM[acc["componentType"]]
     ncomp = TYPESTRUCT[acc["type"]]
     count = acc["count"]
-    stride = bv.get("byteStride") or (size * ncomp)
-    out = []
-    for i in range(count):
-        o = base + i * stride
-        out.append(struct.unpack_from("<%d%s" % (ncomp, fmt), bin_chunk, o))
+    if "bufferView" in acc:
+        bv = js["bufferViews"][acc["bufferView"]]
+        base = bv.get("byteOffset", 0) + acc.get("byteOffset", 0)
+        stride = bv.get("byteStride") or (size * ncomp)
+        out = [struct.unpack_from("<%d%s" % (ncomp, fmt), bin_chunk,
+                                  base + i * stride) for i in range(count)]
+    else:
+        # glTF allows a zero-filled base with sparse overrides.
+        out = [tuple([0.0] * ncomp) for _ in range(count)]
+    if "sparse" in acc:
+        sparse = acc["sparse"]
+        n = sparse["count"]
+        idx = sparse["indices"]
+        if idx["componentType"] not in (5121, 5123, 5125):
+            raise ValueError("Invalid sparse accessor index type")
+        index_fmt, index_size = NUM[idx["componentType"]]
+        iv = js["bufferViews"][idx["bufferView"]]
+        off_idx = iv.get("byteOffset", 0) + idx.get("byteOffset", 0)
+        values = sparse["values"]
+        vv = js["bufferViews"][values["bufferView"]]
+        off_val = vv.get("byteOffset", 0) + values.get("byteOffset", 0)
+        used = set()
+        for k in range(n):
+            dest, = struct.unpack_from("<" + index_fmt, bin_chunk, off_idx + k * index_size)
+            if dest >= count or dest in used:
+                raise ValueError("Invalid sparse accessor index or duplicate")
+            used.add(dest)
+            out[dest] = struct.unpack_from("<%d%s" % (ncomp, fmt), bin_chunk,
+                                           off_val + k * size * ncomp)
     return out
 
 
@@ -154,17 +172,25 @@ def _primitive_report(js, bin_chunk, prim):
     targets = []
     for t_i, tgt in enumerate(prim.get("targets", [])):
         if "POSITION" not in tgt:
+            targets.append({"index":t_i, "vertices_moved":0,
+                            "max_displacement":0.0, "has_position_delta":False})
             continue
-        tpos = read_accessor(js, bin_chunk, tgt["POSITION"])
+        # glTF morph-target POSITION holds a *delta*, not an absolute point.
+        # Comparing base POSITION to that delta previously fabricated motion
+        # even when the target delta was entirely zero.
+        deltas = read_accessor(js, bin_chunk, tgt["POSITION"])
+        if len(deltas) != len(pos):
+            raise ValueError("Morph accessor vertex count differs from POSITION")
         moved = 0
         maxd = 0.0
-        for p, q in zip(pos, tpos):
-            d = sum((p[k] - q[k]) ** 2 for k in range(3)) ** 0.5
+        for delta in deltas:
+            d = sum(component ** 2 for component in delta) ** 0.5
             if d > 1e-6:
                 moved += 1
                 maxd = max(maxd, d)
         targets.append({"index": t_i, "vertices_moved": moved,
-                        "max_displacement": round(maxd, 6)})
+                        "max_displacement": round(maxd, 6),
+                        "has_position_delta": True})
 
     return {
         "vertices": len(pos),

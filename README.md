@@ -4,6 +4,16 @@
 
 LIVYNTH is a long-term digital-human and AI video creation project. Our ambition is to build original, expressive 3D characters and a reproducible video-production engine.
 
+## Start LIVYNTH Studio on Windows (STUDIO-001 alpha)
+
+**User interface:** after updating the current `experiment/c001-geo05-stage1` branch, double-click **`Start_LIVYNTH_Studio.bat`** in the repository folder. The window has a script box and three buttons: **Preview portrait**, **Test 1-sec video**, and **Export full MP4**. Leave the GLB and WAV fields blank to create a generic rigged MPFB character and synthesize offline Windows test speech. It uses installed Blender 4.5 LTS + MPFB and Python; it does not use cloud APIs or GitHub Actions.
+
+**Product status:** this is an integrated **desktop alpha**, not a photorealistic final product. Character 001 five-view identity gate remains **FAIL**. The generated neutral character is generic; lip-sync is approximate. Windows Blender end-to-end render, sound playback and full delivery acceptance are still **UNVERIFIED**. MP4 validation rejects files missing either video or audio tracks, but track existence cannot prove audible speech or correct timing. See [Studio instructions](docs/STUDIO_ALPHA.md).
+
+For local smoke testing, click **Test 1-sec video** before attempting **Export full MP4**. Each run writes its artifacts and an explicit status manifest under `output/studio/`.
+
+---
+
 ## M001 — First Living Human
 
 The first goal is a **12–15 second vertical (1080×1920, 30 fps) talking-human MP4**. Reuse the existing `our_avatar` photoreal character: the external audit confirms it has 52 ARKit face shapes and 15 Meta speech visemes, but **no bones, skins or embedded animation clips**. A skeleton is *not* required for a stationary talking portrait.

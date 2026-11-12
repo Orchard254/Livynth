@@ -1,0 +1,1 @@
+{"schema":"livynth.identity.recipe.v1","character_id":"demo_a","source":"manual_parameters","macros":{"gender":1.0,"age":0.5,"muscle":0.5,"weight":0.5,"proportions":0.5,"height":0.5,"race":{"african":0.0,"asian":0.0,"caucasian":1.0}}}

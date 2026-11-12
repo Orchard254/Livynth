@@ -31,7 +31,7 @@ import numpy as np
 import trimesh
 from PIL import Image
 
-from . import raster
+from . import evidence_qa, raster
 from .raster import view_basis
 
 GATE_DIR = Path(__file__).resolve().parent
@@ -139,9 +139,17 @@ def render_candidate(glb_path, calib_path, out_dir, views, blender=BLENDER,
             expected += ["wireframe_%s.png" % v for v in views]
         elif p == "textured":
             expected += ["textured_%s.png" % v for v in views]
+    if res.returncode != 0:
+        problems.append("blender exited with nonzero returncode: %s" % res.returncode)
     for rel in expected:
-        if not (out_dir / rel).exists():
+        file_path = out_dir / rel
+        if not file_path.exists():
             problems.append("missing render file: %s" % rel)
+        elif rel.startswith("wireframe_"):
+            qa = evidence_qa.audit_wireframe(file_path)
+            if not qa["ok"]:
+                problems.append("unreadable wireframe evidence: %s: %s" % (
+                    rel, ",".join(qa["errors"])))
     return {"returncode": res.returncode, "log": str(log),
             "tail": (res.stdout or "")[-2000:],
             "problems": problems, "ok": not problems}
