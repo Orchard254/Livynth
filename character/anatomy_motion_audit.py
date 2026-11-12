@@ -36,6 +36,36 @@ def displacement_stats(neutral,posed,*,threshold_m=0.0001):
     }
 
 
+def classify_motion_stats(stats):
+    """Recompute diagnostic status from measured metrics, including report QA."""
+    if not isinstance(stats,dict) or set(stats)!=set(REQUIRED):
+        raise OralMotionError("E_MOTION_METRICS_SET")
+    for name in REQUIRED:
+        record=stats[name]
+        if not isinstance(record,dict):
+            raise OralMotionError("E_MOTION_METRICS_ENTRY_"+name)
+        n=record.get("vertex_count")
+        moved=record.get("moved_vertices_gt_0_1_mm")
+        maxd=record.get("max_displacement_m")
+        if (type(n)!=int or n<4 or type(moved)!=int or not 0<=moved<=n
+            or isinstance(maxd,bool) or not isinstance(maxd,(int,float))
+            or not math.isfinite(maxd) or maxd<0 or maxd>5):
+            raise OralMotionError("E_MOTION_METRICS_INVALID_"+name)
+        if (moved==0 and maxd>0.000101) or (moved>0 and maxd<0.000099):
+            raise OralMotionError("E_MOTION_METRICS_INCONSISTENT_"+name)
+    body=stats["body"]
+    if body["moved_vertices_gt_0_1_mm"]<20 or body["max_displacement_m"]<0.001:
+        return "FAIL_BODY_FACIAL_MORPH_INERT"
+    stalled=[name for name in ("teeth","tongue") if
+             stats[name]["moved_vertices_gt_0_1_mm"]==0 or
+             stats[name]["max_displacement_m"]<0.0001]
+    if len(stalled)==2:
+        return "FAIL_ORAL_ASSETS_STATIC_WHILE_BODY_MORPHS"
+    if stalled:
+        return "FAIL_PARTIAL_ORAL_MOTION_SIGNAL"
+    return "ORAL_MOTION_PRESENT_NOT_VISUALLY_APPROVED"
+
+
 def diagnose_oral_motion(neutral_by_object,posed_by_object,*,pose):
     """Report BODY motion vs teeth/tongue follow signal; no visual approval.
 
@@ -52,19 +82,7 @@ def diagnose_oral_motion(neutral_by_object,posed_by_object,*,pose):
         raise OralMotionError("E_MOTION_OBJECT_SET")
     stats={name:displacement_stats(neutral_by_object[name],posed_by_object[name])
            for name in REQUIRED}
-    body=stats["body"]
-    if body["moved_vertices_gt_0_1_mm"]<20 or body["max_displacement_m"]<0.001:
-        status="FAIL_BODY_FACIAL_MORPH_INERT"
-    else:
-        stalled=[name for name in ("teeth","tongue") if
-                 stats[name]["moved_vertices_gt_0_1_mm"]==0 or
-                 stats[name]["max_displacement_m"]<0.0001]
-        if len(stalled)==2:
-            status="FAIL_ORAL_ASSETS_STATIC_WHILE_BODY_MORPHS"
-        elif stalled:
-            status="FAIL_PARTIAL_ORAL_MOTION_SIGNAL"
-        else:
-            status="ORAL_MOTION_PRESENT_NOT_VISUALLY_APPROVED"
+    status=classify_motion_stats(stats)
     return {
         "schema":SCHEMA,
         "pose":pose,
