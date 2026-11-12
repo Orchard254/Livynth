@@ -75,7 +75,7 @@ def _cycles(faces, material_indices=None):
 
 
 def prove_rigged_teeth_seam(tooth_original, tooth_copy, copy_rig,
-                            mhclo_metadata, original_mhclo_path):
+                            mhclo_metadata):
     """Compare real rigged teeth against a disposable duplicated Blender mesh."""
     import bpy
     import bmesh
