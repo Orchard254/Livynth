@@ -319,6 +319,119 @@ def _triangles_intersect(a0, a1, a2, b0, b1, b2, *, epsilon=1e-9):
     return False
 
 
+def _iter_candidate_pairs(tris_a, tris_b, *, aabb_margin):
+    """Shared broadphase: AABB-overlap triangle pairs, sorted z-window."""
+    a_min = tris_a.min(axis=1)
+    a_max = tris_a.max(axis=1)
+    b_min = tris_b.min(axis=1)
+    b_max = tris_b.max(axis=1)
+    order = np.argsort(b_min[:, 2])
+    b_min = b_min[order]
+    b_max = b_max[order]
+    tris_b = tris_b[order]
+    for i in range(len(tris_a)):
+        zlo = a_min[i, 2] - aabb_margin
+        zhi = a_max[i, 2] + aabb_margin
+        left = np.searchsorted(b_min[:, 2], zhi, side='right')
+        for j in range(left):
+            if b_max[j, 2] < zlo:
+                continue
+            if b_max[j, 1] < a_min[i, 1] - aabb_margin:
+                continue
+            if b_min[j, 1] > a_max[i, 1] + aabb_margin:
+                continue
+            if b_max[j, 0] < a_min[i, 0] - aabb_margin:
+                continue
+            if b_min[j, 0] > a_max[i, 0] + aabb_margin:
+                continue
+            yield i, j, int(order[j]), tris_b[j]
+
+
+def _plane_extent(points, triangle0, triangle1, triangle2):
+    """Spread of point z-projections across the other triangle's plane.
+
+    Penetration-depth proxy: max spread of the points' signed distances
+    onto the plane of the reference triangle (0.0 for degenerate planes,
+    falling back to the point diameter). For the near-parallel incisal
+    slabs this approximates how deep the plates pass through each other.
+    """
+    p = np.asarray(points, dtype=np.float64)
+    a, b, c = triangle0, triangle1, triangle2
+    normal = np.cross(b - a, c - a)
+    magnitude = float(np.linalg.norm(normal))
+    if magnitude <= 1e-18:
+        deltas = p[:, None, :] - p[None, :, :]
+        return float(np.linalg.norm(deltas, axis=2).max())
+    unit = normal / magnitude
+    d = (p - a) @ unit
+    return float(d.max() - d.min())
+
+
+def describe_intersecting_triangle_pairs(tris_a, tris_b, *,
+                                         aabb_margin=1e-6,
+                                         max_reported_pairs=64):
+    """Locations and depth proxies for every transversal crossing.
+
+    Returns {'method', 'total_a', 'total_b', 'pairs', 'sample_pairs',
+             'aabb_margin_m', 'pair_details'} where pair_details carries,
+    per crossing pair: triangle indices (as emitted), world-space centroid
+    of the six involved vertices, the extent of each triangle across the
+    other's plane, and ``crossing_depth_estimate_m`` = the smaller of the
+    two extents (a conservative overlap measure).
+    """
+    A = np.asarray(tris_a, dtype=np.float64)
+    B = np.asarray(tris_b, dtype=np.float64)
+    if A.ndim != 3 or A.shape[1:] != (3, 3) or not np.isfinite(A).all():
+        raise MouthAnatomyError('E_INTERSECT_A')
+    if B.ndim != 3 or B.shape[1:] != (3, 3) or not np.isfinite(B).all():
+        raise MouthAnatomyError('E_INTERSECT_B')
+    if len(A) < 1 or len(B) < 1:
+        raise MouthAnatomyError('E_INTERSECT_EMPTY')
+    if not math.isfinite(aabb_margin) or aabb_margin < 0.0:
+        raise MouthAnatomyError('E_INTERSECT_MARGIN')
+    if not isinstance(max_reported_pairs, int) or max_reported_pairs < 1:
+        raise MouthAnatomyError('E_INTERSECT_REPORT_CAP')
+    pairs = 0
+    details = []
+    depths = []
+    for i, j, j_orig, tri_b in _iter_candidate_pairs(A, B,
+                                                     aabb_margin=aabb_margin):
+        tri_a = A[i]
+        if not _triangles_intersect(tri_a[0], tri_a[1], tri_a[2],
+                                    tri_b[0], tri_b[1], tri_b[2]):
+            continue
+        pairs += 1
+        extent_a = _plane_extent(tri_a, tri_b[0], tri_b[1], tri_b[2])
+        extent_b = _plane_extent(tri_b, tri_a[0], tri_a[1], tri_a[2])
+        depth = min(extent_a, extent_b)
+        depths.append(depth)
+        if len(details) < max_reported_pairs:
+            centroid = np.concatenate([tri_a, tri_b]).mean(axis=0)
+            details.append({
+                'pair': [int(i), int(j_orig)],
+                'centroid_m': [round(float(v), 6) for v in centroid],
+                'extent_a_across_b_plane_m': round(float(extent_a), 9),
+                'extent_b_across_a_plane_m': round(float(extent_b), 9),
+                'crossing_depth_estimate_m': round(float(depth), 9),
+            })
+    summary = {
+        'pairs': int(pairs),
+        'crossing_depth_min_m': round(float(min(depths)), 9) if depths else None,
+        'crossing_depth_median_m': round(float(np.median(depths)), 9) if depths else None,
+        'crossing_depth_max_m': round(float(max(depths)), 9) if depths else None,
+    }
+    return {
+        'method': 'MOLLER_TRIANGLE_PIERCE_WITH_PLANE_EXTENT_PROXY',
+        'total_a': int(len(A)),
+        'total_b': int(len(B)),
+        'pairs': int(pairs),
+        'summary': summary,
+        'pair_details': details,
+        'pair_details_truncated': bool(pairs > len(details)),
+        'aabb_margin_m': float(aabb_margin),
+    }
+
+
 def count_intersecting_triangle_pairs(tris_a, tris_b, *,
                                       aabb_margin=1e-6,
                                       max_report_pairs=16):
@@ -337,35 +450,16 @@ def count_intersecting_triangle_pairs(tris_a, tris_b, *,
         raise MouthAnatomyError('E_INTERSECT_EMPTY')
     if not math.isfinite(aabb_margin) or aabb_margin < 0.0:
         raise MouthAnatomyError('E_INTERSECT_MARGIN')
-    a_min = A.min(axis=1)
-    a_max = A.max(axis=1)
-    b_min = B.min(axis=1)
-    b_max = B.max(axis=1)
-    order = np.argsort(b_min[:, 2])
-    b_min = b_min[order]
-    b_max = b_max[order]
-    B = B[order]
     pairs = 0
     samples = []
-    for i in range(len(A)):
-        a0, a1, a2 = A[i]
-        zlo, zhi = a_min[i, 2] - aabb_margin, a_max[i, 2] + aabb_margin
-        left = np.searchsorted(b_min[:, 2], zhi, side='right')
-        for j in range(left):
-            if b_max[j, 2] < zlo:
-                continue
-            if b_max[j, 1] < a_min[i, 1] - aabb_margin:
-                continue
-            if b_min[j, 1] > a_max[i, 1] + aabb_margin:
-                continue
-            if b_max[j, 0] < a_min[i, 0] - aabb_margin:
-                continue
-            if b_min[j, 0] > a_max[i, 0] + aabb_margin:
-                continue
-            if _triangles_intersect(a0, a1, a2, B[j, 0], B[j, 1], B[j, 2]):
-                pairs += 1
-                if len(samples) < max_report_pairs:
-                    samples.append((int(i), int(order[j])))
+    for i, j, j_orig, tri_b in _iter_candidate_pairs(A, B,
+                                                     aabb_margin=aabb_margin):
+        tri_a = A[i]
+        if _triangles_intersect(tri_a[0], tri_a[1], tri_a[2],
+                                tri_b[0], tri_b[1], tri_b[2]):
+            pairs += 1
+            if len(samples) < max_report_pairs:
+                samples.append((int(i), int(j_orig)))
     return {
         'method': 'MOLLER_TRIANGLE_PIERCE',
         'total_a': int(len(A)),

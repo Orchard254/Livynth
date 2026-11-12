@@ -386,18 +386,18 @@ def _arch_world_triangles(teeth, teeth_world, mask):
 
 
 def _oral_collision_audit(body,teeth,tongue,dental_mask,pose_label):
-    """Clearance + exact transversal-crossing audit of oral assets.
+    """Clearance + crossing-location audit of the oral assets.
 
     Distances are point-to-triangle minima (not a volumetric proof).
-    The intersection half uses a Möller transversal-crossing predicate;
-    tangential touches are explicitly not counted as interpenetration.
-    Zero pairs means no transversal crossing was found; it does not
-    certify contact or containment.
+    Crossings use a Möller transversal-crossing predicate; tangential
+    touches are explicitly not counted as interpenetration. Locations are
+    world-space centroids of the six involved vertices plus the smaller
+    of the two onto-other-plane extents as a conservative depth proxy.
     """
     import numpy as np
     from tools.mouth_anatomy import (
         nearest_triangle_distances,distance_summary,
-        count_intersecting_triangle_pairs)
+        describe_intersecting_triangle_pairs)
     try:
         mask=np.asarray(dental_mask).astype(np.int64)
     except (TypeError,ValueError) as exc:
@@ -431,16 +431,17 @@ def _oral_collision_audit(body,teeth,tongue,dental_mask,pose_label):
                 nearest_triangle_distances(teeth_world[points],other))
         else:
             distances[name]={'min_m':None,'sample_count':0}
+    arch=describe_intersecting_triangle_pairs(upper_tris,lower_tris)
+    tongue_int=describe_intersecting_triangle_pairs(tongue_tris,triangles)
     return {
         'pose':pose_label,
         'distance_method':'POINT_TO_TRIANGLE_EVALUATED_WORLD',
-        'intersection_method':'MOLLER_TRANSVERSAL_CROSSING_TEST',
+        'intersection_method':arch['method'],
         'tangential_contact_not_counted':True,
+        'depth_proxy':'MIN_OF_TWO_ONTO_OTHER_PLANE_EXTENTS',
         'distances':distances,
-        'upper_lower_arch_intersections':(
-            count_intersecting_triangle_pairs(upper_tris,lower_tris)),
-        'tongue_teeth_intersections':(
-            count_intersecting_triangle_pairs(tongue_tris,triangles)),
+        'upper_lower_arch_intersections':arch,
+        'tongue_teeth_intersections':tongue_int,
     }
 
 
@@ -517,7 +518,7 @@ def _apply_mouth_anatomy(body,teeth,tongue,dental_mask,*,upper_seat,tongue_seat,
     saved_jaw=float(jaw_keys['jawOpen'].value) if (
         jaw_keys is not None and 'jawOpen' in jaw_keys) else None
     temp_object=None
-    contact_open=None
+    collision_audits={}
     pose_applied_with_correctives=False
     try:
         if oral_assets is not None:
@@ -575,7 +576,7 @@ def _apply_mouth_anatomy(body,teeth,tongue,dental_mask,*,upper_seat,tongue_seat,
         validated_faces=validate_polygon_correspondence(
             [tuple(p.vertices) for p in body.data.polygons],
             [tuple(p.vertices) for p in temp_object.data.polygons])
-        contact_open=_oral_collision_audit(
+        collision_audits['jaw_open_0_85']=_oral_collision_audit(
             body,teeth,tongue,dental_mask,'jaw_open_0.85')
     finally:
         if temp_object is not None:
@@ -590,7 +591,16 @@ def _apply_mouth_anatomy(body,teeth,tongue,dental_mask,*,upper_seat,tongue_seat,
             jaw_keys['jawOpen'].keyframe_insert(data_path='value',frame=1)
             bpy.context.scene.frame_set(1)
             bpy.context.view_layer.update()
-    contact_neutral=_oral_collision_audit(
+    # Collision audits across the remaining review poses (the geometry is
+    # final at this point; pose morphs are set and restored around each).
+    if oral_assets is not None:
+        for label,weights in (('viseme_aa_0_90',POSES['viseme_aa']),
+                              ('viseme_pp_0_90',POSES['viseme_pp'])):
+            _set_morphs(body,weights,oral_assets=oral_assets)
+            collision_audits[label]=_oral_collision_audit(
+                body,teeth,tongue,dental_mask,label)
+        _set_morphs(body,POSES['neutral'],oral_assets=oral_assets)
+    collision_audits['neutral']=_oral_collision_audit(
         body,teeth,tongue,dental_mask,'neutral')
     if not 8<=len(cavity)<=2000:
         raise RuntimeError('E_MOUTH_ANATOMY_CAVITY_FACE_COUNT_'+str(len(cavity)))
@@ -635,8 +645,9 @@ def _apply_mouth_anatomy(body,teeth,tongue,dental_mask,*,upper_seat,tongue_seat,
         'cavity_z_window_m':[round(z_min,6),round(z_max,6)],
         'cavity_z_window_base_m':[round(base_z_min,6),round(base_z_max,6)],
         'cavity_z_window_evaluated_m':[round(z_min,6),round(z_max,6)],
-        'contact_jaw_open_0_85':contact_open,
-        'contact_neutral':contact_neutral,
+        'collision_audits':collision_audits,
+        'contact_jaw_open_0_85':collision_audits.get('jaw_open_0_85'),
+        'contact_neutral':collision_audits.get('neutral'),
         'cavity_half_width_m':CAVITY_HALF_WIDTH,
         'cavity_min_depth_y_m':CAVITY_MIN_DEPTH_Y,
         'body_material_slots':2,

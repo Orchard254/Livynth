@@ -38,15 +38,17 @@ are unchanged everywhere.
 - **Cavity mismatch:** the selector now runs entirely in the evaluated
   jaw-open pose and the evaluated↔base index mapping is *validated*
   (13,378 polygon loop-vertex tuples), never assumed.
-- **Collision checks:** new exact Möller transversal-crossing audit
-  (below) in addition to the point-to-triangle clearance audit. Fixed
-  configuration: **12 upper↔lower arch facet-crossings** at the occlusal
-  plane (the untouched asset has 0; see the trade-off section before
-  judging) and **46 (jaw-open) / 82 (neutral) tongue↔teeth crossings**
-  (untouched asset: 168/201 — improved by the seats).
+- **Collision checks:** per-pose audit reports locations and depth
+  proxies in addition to clearance distances. Upper-to-lower arch
+  crossings are two symmetric canine-region facets at
+  (+-0.0137 m, y ~ -0.104 m, z ~ 1.554-1.557 m) with depth 2.6-4.3 mm
+  (untouched asset: 0; see trade-off section); tongue-to-teeth crossings
+  are reduced to 46 (jaw-open / viseme_aa) / 82 (rest poses) with
+  1.6-8.2 mm depths (untouched asset: 168/201). Full per-pose tables,
+  locations and proxies in section 2.
 
 Renders (this pass):
-`output/mouth_anatomy/20261112_170216_285718/
+`output/mouth_anatomy/20261112_181939_052511/
  front_neutral.png, front_jaw_open.png, front_viseme_aa.png,
  front_viseme_pp.png, three_quarter_viseme_aa.png`
 (400×600 mouth closeup; + `anatomy_pose_report.json`,
@@ -146,10 +148,10 @@ are unchanged.
 
 ## 2. Collision checks (this pass, evaluated world space)
 
-Two complementary audits run on **jawOpen=0.85 with teeth/tongue
-correctives engaged** (before this pass the contact numbers were recorded
-with the correctives disengaged — both poses looked byte-identical; fixed)
-and on **neutral**.
+Both audits run on **all four review poses** (neutral, jaw-open 0.85,
+viseme_aa 0.90, viseme_pp 0.90) with teeth/tongue correctives engaged
+(before this pass the contact numbers were recorded with the correctives
+disengaged — both poses looked byte-identical; fixed).
 
 **(a) Point-to-triangle distances** (`contact_method:
 POINT_TO_TRIANGLE_EVALUATED_WORLD`):
@@ -163,28 +165,45 @@ POINT_TO_TRIANGLE_EVALUATED_WORLD`):
 Tongue-teeth "touching at occlusion" at rest (< 0.1 mm) is the resting
 contact pose, not a defect.
 
-**(b) Exact transversal crossings — new** (`upper_lower_arch_intersections`,
-`tongue_teeth_intersections`; Möller predicate, tangential touches
-excluded, AABB broadphase):
+**(b) Exact transversal crossings with locations and depth proxies — new**
+(`upper_lower_arch_intersections`, `tongue_teeth_intersections`; Möller
+predicate, tangential touches excluded, AABB broadphase; depth proxy = the
+smaller of the two onto-other-plane extents, see
+`describe_intersecting_triangle_pairs`). Measured per pose (evaluated
+world):
 
-| Configuration | Upper↔lower pairs (open / neutral) | Tongue↔teeth pairs (open / neutral) |
-|---|---|---|
-| Untouched asset (seats 0, scale 1.0) | 0 / 0 | 168 / 201 |
-| upper 0.012, tongue 0.024, scale 0.85 | 0 / 10 | 46 / 50 |
-| upper 0.016, tongue 0.024, scale 0.85 | 20 / 6 | n/r |
-| **default: upper 0.022, tongue 0.024, scale 0.85** | **12 / 12** | **46 / 82** |
+| Pose | Upper↔lower pairs (max depth) | Tongue↔teeth pairs (max depth) | tongue→teeth min |
+|---|---|---|---|
+| neutral | 12 (4.29 mm) | 82 (8.19 mm) | 0.34 mm |
+| jaw_open 0.85 | 12 (4.13 mm) | 46 (7.64 mm) | 1.86 mm |
+| viseme_aa 0.90 | 6 (4.19 mm) | 46 (7.64 mm) | 2.05 mm |
+| viseme_pp 0.90 | 12 (4.29 mm) | 82 (8.19 mm) | 0.34 mm |
+
+(viseme_pp == neutral by construction: the PP corrective does not move
+teeth/tongue; the lip-press pose is teeth-static.)
+
+**Collision locations (from `pair_details` in the JSON report):**
+
+- Upper↔lower arch: 2 symmetric upper facets (tri index 1 right,
+  922 left — the lateral-incisor/canine region) piercing 6 lower-arch
+  facets each. World centroids: x = ±0.0134…0.0139 m, y ≈ −0.104 m,
+  z ≈ 1.554…1.557 m. Depth estimate per pair 2.6–4.3 mm. Present in all
+  poses (posterior interlock does not separate at jaw-open).
+- Tongue↔teeth: centroids at x ≈ −0.002…−0.016 m (tongue sits left of
+  the sagittal midline), y ≈ −0.078…−0.109 m, z ≈ 1.541…1.554 m — the
+  tongue's left wall crossing the lower arch's inner facets. Depth per
+  pair 1.6–8.2 mm. Reduced by the tongue seat (untouched asset: 168/201
+  pairs; fixed: 46 jaw-open / 46 viseme_aa / 82 rest poses).
 
 Attribution: the upper-arch seat (the fix for the invisible arch) moves
 the upper cusps 22 mm into the designed occlusal interlock, adding the
-12 crossings (2 upper facets — incisal ridge facets — in both poses).
-The untouched asset's 0 results from the arches simply never meeting.
-Tongue↔teeth crossings are **reduced** from 168/201 to 46/82 by the
-tongue seat.
+arch crossings. The untouched asset's 0 results from the arches simply
+never meeting.
 
-**Trade-off (owner decision):** `--upper-seat 0.012` yields 0/10 crossings
-but renders the cusps as detached photo-projection bulbs and was rejected
-visually. 12/12 facet crossings at the occlusal plane are the asset's
-designed bite interlock (photographic MPFB slabs), not gross
+**Trade-off (owner decision):** `--upper-seat 0.012` yields 0 open-pose
+crossings but renders the cusps as detached photo-projection bulbs and
+was rejected visually. 12/12 facet crossings at the occlusal plane are
+the asset's designed bite interlock (photographic MPFB slabs), not gross
 interpenetration — the renders show a clean tooth row with a dark gap to
 the lower arch. `--upper-seat 0.012` remains one flag away if the owner
 prefers zero crossings over the current render.
@@ -207,7 +226,7 @@ covers transversal crossings only, not coplanar overlap), self-intersections
 ## 3. Renders and crops (independently reviewable)
 
 Official run for this pass:
-`output/mouth_anatomy/20261112_170216_285718/`
+`output/mouth_anatomy/20261112_181939_052511/`
 
 | File | Content |
 |---|---|
@@ -235,8 +254,8 @@ rather than masked.
 
 | Suite | Result |
 |---|---|
-| `python -m unittest discover -s tests -p "test_mouth_anatomy.py" -v` | **87 tests OK** (seats, scale, sulcus falloff, gum classifier, Möller predicate, polygon correspondence, point-to-triangle distances, cavity selection) |
-| `python -m unittest discover -s tests` | **448 tests OK** (skipped 5, pre-existing) |
+| `python -m unittest discover -s tests -p "test_mouth_anatomy.py" -v` | **93 tests OK** (seats, scale, sulcus falloff, gum classifier, Möller predicate, polygon correspondence, point-to-triangle distances, cavity selection) |
+| `python -m unittest discover -s tests` | **454 tests OK** (skipped 5, pre-existing) |
 | `python tools/local_check.py` | **PASS** (exit 0) |
 | `python tools/branch_audit.py --run-tests` | exit 0; geo/tests and local_check passed; `main` untouched (`0db7a7d`) |
 | `python tools/run_mouth_anatomy.py` | `CAPTURED_HEAD_A_MOUTH_ANATOMY_PENDING_VISUAL_REVIEW`; report contract validated (incl. cavity correspondence and Möller audit presence); ZIP produced |

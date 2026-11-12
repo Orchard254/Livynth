@@ -13,7 +13,8 @@ from tools.mouth_anatomy import (
     plan_uniform_scale,plan_lip_soften,validate_polygon_correspondence,
     nearest_triangle_distances,distance_summary,
     classify_gum_pixels,mute_gum_pixels,
-    count_intersecting_triangle_pairs)
+    count_intersecting_triangle_pairs,
+    describe_intersecting_triangle_pairs)
 from tools.mouth_anatomy import MouthAnatomyError
 
 
@@ -559,6 +560,76 @@ class IntersectionTests(unittest.TestCase):
         with self.assertRaisesRegex(MouthAnatomyError, 'E_INTERSECT_MARGIN'):
             count_intersecting_triangle_pairs(
                 self.tri_a, self.tri_a, aabb_margin=-1.0)
+
+
+class DescribeCrossingTests(unittest.TestCase):
+    def setUp(self):
+        self.tri_a = np.array([[[-1.0, 1.0, 0.0], [1.0, 1.0, 0.0],
+                                [0.0, -1.0, 0.0]]])
+
+    def test_locations_and_depth_proxy(self):
+        tri_b = np.array([[[0.0, 0.0, -1.0], [0.0, 0.6, 1.0],
+                           [0.0, -0.6, 1.0]]])
+        result = describe_intersecting_triangle_pairs(self.tri_a, tri_b)
+        self.assertEqual(result['pairs'], 1)
+        detail = result['pair_details'][0]
+        self.assertEqual(detail['pair'], [0, 0])
+        centroid = detail['centroid_m']
+        # six involved vertices: mean = (0, (-1+1+1+0.6+0+0.6... ) ...)
+        expected = np.mean(np.array(
+            [[-1, 1, 0], [1, 1, 0], [0, -1, 0],
+             [0, 0, -1], [0, 0.6, 1], [0, -0.6, 1]]), axis=0)
+        np.testing.assert_allclose(np.array(centroid), expected, atol=1e-6)
+        # A lies in z=0 (extent of B across A's plane = B's z spread = 2.0)
+        self.assertAlmostEqual(detail['extent_b_across_a_plane_m'], 2.0,
+                               places=6)
+        # B lies in x=0; extent of A across B's plane = A's x spread = 2.0
+        self.assertAlmostEqual(detail['extent_a_across_b_plane_m'], 2.0,
+                               places=6)
+        self.assertAlmostEqual(detail['crossing_depth_estimate_m'], 2.0,
+                               places=6)
+        self.assertEqual(result['method'],
+                         'MOLLER_TRIANGLE_PIERCE_WITH_PLANE_EXTENT_PROXY')
+        self.assertEqual(result['summary']['pairs'], 1)
+
+    def test_no_crossings_gives_empty_details(self):
+        tri_b = np.array([[[5.0, 5.0, 5.0], [6.0, 5.0, 5.0],
+                           [5.0, 6.0, 5.0]]])
+        result = describe_intersecting_triangle_pairs(self.tri_a, tri_b)
+        self.assertEqual(result['pairs'], 0)
+        self.assertEqual(result['pair_details'], [])
+        self.assertIsNone(result['summary']['crossing_depth_min_m'])
+        self.assertIsNone(result['summary']['crossing_depth_median_m'])
+        self.assertIsNone(result['summary']['crossing_depth_max_m'])
+
+    def test_tangential_touch_not_counted(self):
+        tri_b = np.array([[[0.0, 0.0, 0.0], [0.0, 0.5, 1.0],
+                           [0.0, -0.5, 1.0]]])
+        result = describe_intersecting_triangle_pairs(self.tri_a, tri_b)
+        self.assertEqual(result['pairs'], 0)
+
+    def test_count_and_describe_agree(self):
+        tris_a = np.repeat(self.tri_a, 5, axis=0)
+        tri_b = np.array([[[0.0, 0.0, -1.0], [0.0, 0.6, 1.0],
+                           [0.0, -0.6, 1.0]]])
+        counted = count_intersecting_triangle_pairs(tris_a, tri_b)
+        described = describe_intersecting_triangle_pairs(tris_a, tri_b)
+        self.assertEqual(counted['pairs'], described['pairs'])
+
+    def test_details_capped(self):
+        tris_a = np.repeat(self.tri_a, 4, axis=0)
+        tri_b = np.array([[[0.0, 0.0, -1.0], [0.0, 0.6, 1.0],
+                           [0.0, -0.6, 1.0]]])
+        result = describe_intersecting_triangle_pairs(
+            tris_a, tri_b, max_reported_pairs=2)
+        self.assertEqual(result['pairs'], 4)
+        self.assertEqual(len(result['pair_details']), 2)
+        self.assertTrue(result['pair_details_truncated'])
+
+    def test_bad_report_cap_rejected(self):
+        with self.assertRaisesRegex(MouthAnatomyError, 'E_INTERSECT_REPORT_CAP'):
+            describe_intersecting_triangle_pairs(
+                self.tri_a, self.tri_a, max_reported_pairs=0)
 
 
 class ConstantSanityTests(unittest.TestCase):

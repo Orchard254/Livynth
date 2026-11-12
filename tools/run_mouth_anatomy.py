@@ -128,15 +128,35 @@ def validate_report(data,output):
                 'VALIDATED_POLYGON_LOOP_VERTEX_TUPLES' or
             not isinstance(fix.get('cavity_validated_polygons'),int) or
             fix['cavity_validated_polygons']!=fix.get('cavity_total_faces') or
-            not isinstance(fix.get('contact_jaw_open_0_85'),dict) or
-            not isinstance(fix.get('contact_neutral'),dict) or
-            any('MOLLER_TRANSVERSAL_CROSSING_TEST' !=
-                fix[pose].get('intersection_method') or
-                not isinstance(fix[pose].get('upper_lower_arch_intersections'),dict) or
-                not isinstance(fix[pose]['upper_lower_arch_intersections'].get('pairs'),int) or
-                not isinstance(fix[pose].get('tongue_teeth_intersections'),dict) or
-                not isinstance(fix[pose]['tongue_teeth_intersections'].get('pairs'),int)
-                for pose in ('contact_jaw_open_0_85','contact_neutral')) or
+            not isinstance(fix.get('collision_audits'),dict) or
+            any(pose not in fix['collision_audits'] for pose in
+                ('jaw_open_0_85','neutral','viseme_aa_0_90','viseme_pp_0_90')) or
+            any(not isinstance(fix['collision_audits'][pose],dict) or
+                fix['collision_audits'][pose].get('distance_method')!=
+                    'POINT_TO_TRIANGLE_EVALUATED_WORLD' or
+                fix['collision_audits'][pose].get('intersection_method')!=
+                    'MOLLER_TRIANGLE_PIERCE_WITH_PLANE_EXTENT_PROXY' or
+                fix['collision_audits'][pose].get(
+                    'tangential_contact_not_counted') is not True or
+                not isinstance(fix['collision_audits'][pose].get('distances'),dict) or
+                not isinstance(fix['collision_audits'][pose]['distances'].get(
+                    'tongue_to_teeth'),dict) or
+                any(not isinstance(fix['collision_audits'][pose].get(
+                        audit),dict) or
+                    not isinstance(fix['collision_audits'][pose][audit].get(
+                        'pairs'),int) or
+                    not isinstance(fix['collision_audits'][pose][audit].get(
+                        'pair_details'),list) or
+                    not all(isinstance(entry.get('centroid_m'),list) and
+                            len(entry['centroid_m'])==3 and
+                            isinstance(entry.get(
+                                'crossing_depth_estimate_m'),(int,float))
+                            for entry in fix['collision_audits'][pose][audit]
+                            ['pair_details'])
+                    for audit in ('upper_lower_arch_intersections',
+                                  'tongue_teeth_intersections'))
+                for pose in ('jaw_open_0_85','neutral',
+                             'viseme_aa_0_90','viseme_pp_0_90')) or
             fix['cavity_z_window_m']!=fix.get('cavity_z_window_evaluated_m') or
             fix.get('upper',{}).get('selected_vertices')!=1984 or
             fix.get('tongue',{}).get('selected_vertices')!=226):
@@ -207,6 +227,7 @@ def main(argv=None):
     except (OSError,ValueError,RuntimeError) as exc:
         parser.exit(2,'LIVYNTH IDENTITY-025 FAIL: '+str(exc)+
                     '\nGenerated files if any: '+str(output)+'\n')
+    audits=data['mouth_anatomy_audit']['collision_audits']
     print(json.dumps({
         'status':data['status'],
         'scope':data['render_scope'],
@@ -215,15 +236,20 @@ def main(argv=None):
         'tongue_seat_m':data['mouth_anatomy_audit']['tongue_seat_m'],
         'tooth_scale':data['mouth_anatomy_audit']['tooth_scale_value'],
         'cavity_faces':data['mouth_anatomy_audit']['cavity_faces'],
-        'contact_jaw_open_tongue_to_teeth_min_m':
-            data['mouth_anatomy_audit']['contact_jaw_open_0_85']
-            ['distances']['tongue_to_teeth']['min_m'],
-        'upper_lower_arch_intersections_open':
-            data['mouth_anatomy_audit']['contact_jaw_open_0_85']
-            ['upper_lower_arch_intersections']['pairs'],
-        'upper_lower_arch_intersections_neutral':
-            data['mouth_anatomy_audit']['contact_neutral']
-            ['upper_lower_arch_intersections']['pairs'],
+        'collision_audits':{
+            pose:{
+                'arch_pairs':audit['upper_lower_arch_intersections']['pairs'],
+                'arch_crossing_depth_max_m':audit[
+                    'upper_lower_arch_intersections']['summary']
+                    ['crossing_depth_max_m'],
+                'tongue_pairs':audit['tongue_teeth_intersections']['pairs'],
+                'tongue_crossing_depth_max_m':audit[
+                    'tongue_teeth_intersections']['summary']
+                    ['crossing_depth_max_m'],
+                'tongue_teeth_min_m':audit['distances'][
+                    'tongue_to_teeth']['min_m'],
+            } for pose,audit in audits.items()
+        },
         'review_zip':str(archive),
         'visual_quality':'PENDING_INDEPENDENT_REVIEW',
     },indent=2))
