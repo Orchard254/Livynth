@@ -7,6 +7,7 @@ MHCLO mapping or cross-jaw face MUST fail instead of stretching teeth.
 from __future__ import annotations
 
 import hashlib
+import math
 import numpy as np
 
 LOWER_HELPER=(14992,15059)
@@ -31,6 +32,10 @@ def classify_dentition_mhclo(vertex_count,mappings,faces,*,source_vertex_count=S
         not isinstance(faces,(list,tuple)) or not faces):
         raise DentitionMappingError('E_MHCLO_INPUT_CONTRACT')
     lower=np.empty(vertex_count,dtype=np.uint8)
+    signed_count=0
+    nonunit_sum_count=0
+    min_weight_sum=float('inf')
+    max_weight_sum=float('-inf')
     for i in range(vertex_count):
         match=mappings.get(i)
         if not isinstance(match,dict):
@@ -45,19 +50,36 @@ def classify_dentition_mhclo(vertex_count,mappings,faces,*,source_vertex_count=S
             weights=np.asarray(coeff,dtype=float)
         except (TypeError,ValueError) as exc:
             raise DentitionMappingError('E_MHCLO_BAD_WEIGHTS') from exc
-        if (not np.isfinite(weights).all() or np.min(weights)<-1e-8 or
-            abs(float(weights.sum())-1.0)>1e-4):
-            raise DentitionMappingError('E_MHCLO_BAD_WEIGHTS')
-        lo=sum(float(w) for j,w in zip(refs,weights)
-               if LOWER_HELPER[0]<=j<=LOWER_HELPER[1])
-        hi=sum(float(w) for j,w in zip(refs,weights)
-               if UPPER_HELPER[0]<=j<=UPPER_HELPER[1])
-        if lo>=0.999 and hi<=0.001:
+        if not np.isfinite(weights).all():
+            raise DentitionMappingError('E_MHCLO_BAD_WEIGHTS: nonfinite at '+str(i))
+        # MHCLO interpolations can contain extrapolation/signed coefficients;
+        # their sum/positivity is NOT a jaw-affiliation requirement. Never
+        # renormalize the actual fitting values used by MPFB.
+        absolute=np.abs(weights)
+        total=float(absolute.sum())
+        if not math.isfinite(total) or total<=1e-10 or total>100:
+            raise DentitionMappingError('E_MHCLO_BAD_WEIGHTS: degenerate at '+str(i))
+        weight_sum=float(weights.sum())
+        min_weight_sum=min(min_weight_sum,weight_sum)
+        max_weight_sum=max(max_weight_sum,weight_sum)
+        signed_count+=int(np.any(weights<-1e-8))
+        nonunit_sum_count+=int(abs(weight_sum-1.0)>1e-4)
+        # Absolute contribution mass is used ONLY for attribution, not for
+        # fitting geometry. A negatively weighted source reference remains
+        # evidence that the vertex depends on that jaw, not negative mass.
+        lower_mass=sum(float(abs(w)) for j,w in zip(refs,weights)
+                       if LOWER_HELPER[0]<=j<=LOWER_HELPER[1])
+        upper_mass=sum(float(abs(w)) for j,w in zip(refs,weights)
+                       if UPPER_HELPER[0]<=j<=UPPER_HELPER[1])
+        if lower_mass/total>=0.999 and upper_mass/total<=0.001:
             lower[i]=1
-        elif hi>=0.999 and lo<=0.001:
+        elif upper_mass/total>=0.999 and lower_mass/total<=0.001:
             lower[i]=0
         else:
-            raise DentitionMappingError('E_MHCLO_AMBIGUOUS_JAW_VERTEX')
+            raise DentitionMappingError(
+                'E_MHCLO_AMBIGUOUS_JAW_VERTEX: index='+str(i)+
+                ' lower_mass_fraction='+str(round(lower_mass/total,6))+
+                ' upper_mass_fraction='+str(round(upper_mass/total,6)))
     count_lower=int(np.count_nonzero(lower))
     count_upper=vertex_count-count_lower
     if min(count_lower,count_upper)<max(20,vertex_count//10):
@@ -80,6 +102,11 @@ def classify_dentition_mhclo(vertex_count,mappings,faces,*,source_vertex_count=S
         'upper_teeth_vertices':count_upper,
         'face_count':len(faces),
         'mixed_jaw_faces':0,
+        'signed_coefficient_vertices':signed_count,
+        'nonunit_coefficient_sum_vertices':nonunit_sum_count,
+        'minimum_raw_coefficient_sum':round(min_weight_sum,6),
+        'maximum_raw_coefficient_sum':round(max_weight_sum,6),
+        'jaw_classification_uses':'ABSOLUTE_REFERENCE_CONTRIBUTION_NOT_WEIGHT_NORMALIZATION',
         'lower_mask_sha256':hashlib.sha256(lower.tobytes()).hexdigest(),
         'mesh_topology_modified':False,
         'anatomical_contact':'PENDING_VISUAL_REVIEW',

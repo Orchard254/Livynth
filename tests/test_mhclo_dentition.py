@@ -84,6 +84,40 @@ class OriginalHelperDentalTests(unittest.TestCase):
         with self.assertRaisesRegex(DentitionMappingError,'E_MHCLO_UNBALANCED_JAWS'):
             classify_dentition_mhclo(200,mapping,faces)
 
+    def test_signed_extrapolation_within_lower_jaw_is_accepted(self):
+        mapping,faces=fixture()
+        mapping[0]={'verts':(14992,14993,0),'weights':(1.20,-.20,0)}
+        lower,audit=classify_dentition_mhclo(200,mapping,faces)
+        self.assertEqual(lower[0],1)
+        self.assertEqual(audit['signed_coefficient_vertices'],1)
+        self.assertEqual(audit['lower_teeth_vertices'],100)
+
+    def test_nonunit_coefficients_within_one_jaw_are_attributed_not_refitted(self):
+        mapping,faces=fixture()
+        mapping[0]={'verts':(14992,14993,0),'weights':(.50,.30,0)}
+        lower,audit=classify_dentition_mhclo(200,mapping,faces)
+        self.assertEqual(lower[0],1)
+        self.assertEqual(audit['nonunit_coefficient_sum_vertices'],1)
+        self.assertAlmostEqual(audit['minimum_raw_coefficient_sum'],.8)
+
+    def test_negative_reference_to_other_jaw_remains_ambiguous(self):
+        mapping,faces=fixture()
+        mapping[0]={'verts':(14992,15060,0),'weights':(1.2,-.2,0)}
+        with self.assertRaisesRegex(DentitionMappingError,'E_MHCLO_AMBIGUOUS_JAW_VERTEX'):
+            classify_dentition_mhclo(200,mapping,faces)
+
+    def test_all_zero_coefficients_are_rejected(self):
+        mapping,faces=fixture()
+        mapping[0]={'verts':(14992,14993,0),'weights':(0.0,0.0,0.0)}
+        with self.assertRaisesRegex(DentitionMappingError,'E_MHCLO_BAD_WEIGHTS'):
+            classify_dentition_mhclo(200,mapping,faces)
+
+    def test_non_dental_reference_with_negative_weight_rejected(self):
+        mapping,faces=fixture()
+        mapping[0]={'verts':(14992,8000,0),'weights':(1.1,-.1,0)}
+        with self.assertRaisesRegex(DentitionMappingError,'E_MHCLO_AMBIGUOUS_JAW_VERTEX'):
+            classify_dentition_mhclo(200,mapping,faces)
+
     def test_source_mesh_must_be_native_19158(self):
         mapping,faces=fixture()
         with self.assertRaisesRegex(DentitionMappingError,'E_MHCLO_INPUT_CONTRACT'):
