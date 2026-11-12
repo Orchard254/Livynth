@@ -97,6 +97,14 @@ Feature branch adds recipe v2 (backwards compatible v1), bounded native head def
 
 **This is a significant reusable-geometry milestone, NOT automatic reconstruction from photos.** Photo landmark/camera fitting has not yet been implemented, and Character 001 Phase-3 likeness remains FAIL.
 
+## IDENTITY-004 — uncalibrated image-landmark-to-head-parameter fitting (2026-11-12)
+
+Implemented a bounded weighted least-squares map from manually measured 2D landmarks plus estimated camera projection to the six detailed identity controls from IDENTITY-003. Tests on synthetic multi-view correspondences recover deliberately injected coefficients. The tool rejects missing camera/view evidence, rank deficiency, and unsafe folding. It uses native geometry-backoff if the raw fit is locally unsafe, but **never creates an approved image-derived Blender recipe**.
+
+**Actual Character 001 diagnostic:** using owner C001 source neutral mesh and manually measured front/left/right profile evidence (camera geometry assumed), full-strength fitted geometry failed local quad collapse. Backoff to 0.60 gave min area ratio 0.432 and combined sigma-normalized residual 1.3573→0.9661, but the **right profile regressed** 0.2992→0.3579. Result is **REJECTED_PROFILE_REGRESSION**, heldout five-view evaluation NOT RUN, likeness Phase-3 remains FAIL. The CLI returns a nonzero exit code on rejection. Full details in docs/IDENTITY_IMAGE_FIT_004.md.
+
+**Limitations:** image landmark detector and proper correspondence mapping are not connected to the solver, cameras are separately estimated from source, and the current six coefficients cannot represent full human identity. This is a diagnostic fit component, not the final image-to-3D system.
+
 ## Explicit next acceptance gates
 
 1. **Owner Windows integrated smoke**: open the Studio, inspect actual neutral PNG, render a 30-frame MP4 and confirm it visually plays with audible speech; save `studio_run.json` and Blender diagnostics. Fail any stage that is black, visually incorrect, silent, or crashes. Repeat with `--mode demo` before release.
