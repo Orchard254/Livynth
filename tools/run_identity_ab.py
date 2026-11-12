@@ -48,8 +48,8 @@ def run(*, blender, out, a, b, execute=subprocess.run):
 
 def main(argv=None):
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--a',type=Path,default=ROOT/'character/recipes/demo_a.json')
-    p.add_argument('--b',type=Path,default=ROOT/'character/recipes/demo_b.json')
+    p.add_argument('--a',type=Path,default=ROOT/'character/recipes/demo_head_a.json')
+    p.add_argument('--b',type=Path,default=ROOT/'character/recipes/demo_head_b.json')
     p.add_argument('--blender',default='')
     p.add_argument('--out',type=Path,default=None)
     args=p.parse_args(argv)
