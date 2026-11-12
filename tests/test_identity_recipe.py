@@ -70,6 +70,33 @@ class RecipeTests(unittest.TestCase):
         with self.assertRaisesRegex(InvalidIdentityRecipe,'E_TOPOLOGY_QUADS'):
             neutral_topology_sha256(faces[:3]+[(1,2,3)])
 
+class ExporterArgumentTests(unittest.TestCase):
+    def test_existing_default_cli_unchanged(self):
+        import sys
+        from unittest.mock import patch
+        from tools.mpfb_headless_probe import _parse_args
+        with patch.object(sys,'argv',['blender','--','--out','output/default.glb']):
+            args=_parse_args()
+        self.assertEqual(args[0],'output/default.glb')
+        self.assertIsNone(args[-1])
+
+    def test_identity_recipe_reaches_exporter_cli(self):
+        import sys
+        from unittest.mock import patch
+        from tools.mpfb_headless_probe import _parse_args
+        with patch.object(sys,'argv',['blender','--','--identity-recipe','demo_b.json']):
+            self.assertEqual(_parse_args()[-1],'demo_b.json')
+
+    def test_identity_recipe_and_stage1_constraints_fail_closed(self):
+        import sys
+        from unittest.mock import patch
+        from tools.mpfb_headless_probe import _parse_args
+        with patch.object(sys,'argv',['blender','--','--identity-recipe','demo_a.json',
+                                        '--stage1-constraints','old_fit.json']):
+            with self.assertRaisesRegex(ValueError,'cannot be combined'):
+                _parse_args()
+
+
 class ComparisonTests(unittest.TestCase):
     def test_distinct_verified_structure(self):
         self.assertIn('NOT_LIKENESS',compare(sample('a','a','hashA'),sample('b','b','hashB'))['status'])
