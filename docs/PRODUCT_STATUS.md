@@ -105,6 +105,20 @@ Implemented a bounded weighted least-squares map from manually measured 2D landm
 
 **Limitations:** image landmark detector and proper correspondence mapping are not connected to the solver, cameras are separately estimated from source, and the current six coefficients cannot represent full human identity. This is a diagnostic fit component, not the final image-to-3D system.
 
+## IDENTITY-005 — first real Windows two-character export; fingerprint repair (2026-11-12)
+
+**Owner Windows Blender 4.5.10 / MPFB 20261010 A/B export: BOTH SUCCESSFUL.** After pulling development head 6887866, the owner ran python tools/local_check.py and python tools/run_identity_ab.py. The Python suite completed 164 tests, **one failure** (test_studio expected E_RECIPE_FIELDS for an invalid schema, while the validator correctly raised E_RECIPE_SCHEMA), **two skipped**; local_check stopped before geometry discovery. The test expectation is corrected in this change and a missing-fields regression is added; the entire Windows suite still needs rerun.
+
+Both rigged GLBs exported and **all 13 export assertions passed** individually: demo_head_a.glb 5,734,608 bytes and demo_head_b.glb 5,747,536 bytes; both contain skin, UV, 163 joints and 67 facial shape targets, one character mesh, 13,380 baked-native vertices, 13,378 quads, matching native topology SHA 2ed8e59f... Both geometry SHA fingerprints differ.
+
+The original combined comparator exited E_HEAD_SHAPE_AUDIT_a because the exporter hashed a **planned float64 shape** before assigning positions to Blender's **float32 mesh**. An independent recomputation from the original owner-supplied neutral NPZ (source SHA 64b001da...) with the same six controls, explicitly quantizing to float32, exactly reproduces **both stored hashes**:
+- A: 3c27640ea147aaa0fbe906c9010f492afe806b35280f824463f1edfb6c38db69
+- B: 94a16d3a94143b2513b9b310da9ba7cd0413ab74dd07d6d0b93f5975fdb04936
+
+**Fix:** after assigning Blender vertices, read them back; check they match the float32-quantized proposal within 0.2 micrometres, independently rerun local fold/area tests on the stored positions, and hash those stored positions. The compiler, numeric and negative-injection tests pass in the authoring environment. This preserves the strict comparison instead of disabling it.
+
+**Result:** forensically reconstructed logs satisfy the full structural comparator after accounting for deterministic precision, but the user's original run genuinely returned FAILURE and neither raw GLB was independently opened here. **Animation behavior (blink/jaw/visemes), image likeness, five-view approval and photorealism still UNVERIFIED/FAIL where applicable.** The Blender warning of >4 skin influences truncated on glTF export remains an independent motion-quality risk.
+
 ## Explicit next acceptance gates
 
 1. **Owner Windows integrated smoke**: open the Studio, inspect actual neutral PNG, render a 30-frame MP4 and confirm it visually plays with audible speech; save `studio_run.json` and Blender diagnostics. Fail any stage that is black, visually incorrect, silent, or crashes. Repeat with `--mode demo` before release.
