@@ -2,7 +2,7 @@
 import unittest
 from types import SimpleNamespace
 
-from video.render_talk import shot_settings, studio_palette, shirt_cutoff, find_face_body_mesh, mesh_shape_inventory
+from video.render_talk import shot_settings, studio_palette, shirt_cutoff, find_face_body_mesh, mesh_shape_inventory, assess_preview_wardrobe
 
 
 class PortraitPresetTests(unittest.TestCase):
@@ -58,8 +58,37 @@ class PortraitPresetTests(unittest.TestCase):
 
     def test_shirt_cutoff_higher_at_shoulders(self):
         height,crown=1.6,1.6
-        self.assertFalse(shirt_cutoff(0,1.26,0,crown,height))
-        self.assertTrue(shirt_cutoff(0.30,1.26,0,crown,height))
+        self.assertFalse(shirt_cutoff(0,1.35,0,crown,height))
+        self.assertTrue(shirt_cutoff(0.30,1.35,0,crown,height))
+
+    def test_raised_neckline_visible_without_coloring_face(self):
+        crown,height=1.74729049,1.74729049
+        # These are physical-region controls on the verified neutral mesh.
+        self.assertTrue(shirt_cutoff(0,1.35,0,crown,height))
+        self.assertTrue(shirt_cutoff(0.15,1.44,0,crown,height))
+        self.assertFalse(shirt_cutoff(0,1.49,0,crown,height))
+        self.assertFalse(shirt_cutoff(0.08,1.56,0,crown,height))
+
+    def test_shirt_pixel_gate_rejects_uploaded_clay_on_clay_preview(self):
+        # Rounded medians measured on actual Windows STUDIO-006 540x960 PNG.
+        report = assess_preview_wardrobe((188,173,165),(199,186,178))
+        self.assertEqual(report['status'],'FAIL_INVISIBLE_SHIRT')
+        self.assertGreater(report['torso_to_face_luminance'],0.90)
+
+    def test_shirt_pixel_gate_accepts_distinct_navy(self):
+        report = assess_preview_wardrobe((188,173,165),(17,38,78))
+        self.assertEqual(report['status'],'PASS_VISIBLE_NAVY_SHIRT')
+        self.assertLess(report['torso_to_face_luminance'],0.5)
+
+    def test_shirt_pixel_gate_rejects_dark_grayscale_clothing(self):
+        # A dark outline is not enough: it needs an identifiable navy region.
+        report = assess_preview_wardrobe((188,173,165),(50,50,50))
+        self.assertEqual(report['status'],'FAIL_INVISIBLE_SHIRT')
+
+    def test_shirt_pixel_gate_rejects_invalid_pixels(self):
+        for rgb in ((float('nan'),.1,.1),(-1,1,1),(1,2)):
+            with self.subTest(rgb=rgb),self.assertRaises(ValueError):
+                assess_preview_wardrobe(rgb,(0.02,0.04,0.09))
 
     def test_shirt_cutoff_rejects_invalid_height(self):
         with self.assertRaises(ValueError):
