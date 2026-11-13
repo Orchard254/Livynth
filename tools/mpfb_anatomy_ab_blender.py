@@ -899,7 +899,7 @@ def _audit_jaw_and_visemes(body,assets,*,use_oral_correctives=False):
     return reports
 
 
-def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False,mhclo_dentition=False,rigged_seam_probe=False,seam_jaw_stills=False,oral_isolation=False,dental_arch_isolation=False,oral_anatomy=False,upper_seat=None,tongue_seat=None,tooth_scale=None,lip_push=None,tongue_scale=None,tongue_shift_y=None):
+def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False,mhclo_dentition=False,rigged_seam_probe=False,seam_jaw_stills=False,oral_isolation=False,dental_arch_isolation=False,oral_anatomy=False,upper_seat=None,tongue_seat=None,tooth_scale=None,lip_push=None,tongue_scale=None,tongue_shift_y=None,procedural_dentition=False):
     import bpy
     import numpy as np
     from bl_ext.user_default.mpfb.services import (
@@ -919,6 +919,12 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
         upper_seat=UPPER_SEAT_M if upper_seat is None else float(upper_seat)
         tongue_seat=TONGUE_SEAT_M if tongue_seat is None else float(tongue_seat)
         seam_jaw_stills=True
+    if procedural_dentition:
+        if not oral_anatomy:
+            raise ValueError('E_ID028_REQUIRES_ORAL_ANATOMY')
+        if not all((align_accessories,audit_oral_motion,oral_correctives,
+                    mhclo_dentition,seam_jaw_stills)):
+            raise ValueError('E_ID028_REQUIRES_VERIFIED_ORAL_PIPELINE')
 
     if oral_correctives and not (align_accessories and audit_oral_motion):
         raise ValueError('E_ORAL_CORRECTIVES_REQUIRE_ALIGNMENT_AND_AUDIT')
@@ -1186,6 +1192,88 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
             raise RuntimeError('E_ID025_ORAL_MOTION_AFTER_FIX')
         _set_morphs(body,{},oral_assets=controlled)
 
+    if procedural_dentition:
+        # IDENTITY-028: replace the photo slab with the procedural
+        # permanent dentition; correct the lip-opening border. The slab
+        # itself is hidden from renders and never edited or exported.
+        from tools.procedural_dentition_blender import (
+            create_procedural_objects,storage_validate,
+            procedural_collision_audit,procedural_motion_audit,
+            reshape_lip_opening)
+        slab_collision_reference={pose:{'pairs':audit['upper_lower_arch_intersections']['pairs'],
+                                        'depth_max_m':audit['upper_lower_arch_intersections']['summary']['crossing_depth_max_m'],
+                                        'tongue_pairs':audit['tongue_teeth_intersections']['pairs'],
+                                        'tongue_depth_max_m':audit['tongue_teeth_intersections']['summary']['crossing_depth_max_m'],
+                                        'tongue_teeth_min_m':audit['distances']['tongue_to_teeth']['min_m']}
+                                  for pose,audit in mouth_anatomy_audit['collision_audits'].items()}
+        proc_objects,proc_audit=create_procedural_objects(body)
+        storage_validate(body,proc_objects)
+        lip_audit=reshape_lip_opening(body)
+        slab=actual_assets['teeth']
+        slab_hide_render_archived=slab.hide_render
+        slab.hide_render=True
+        # NOTE: hide_viewport must stay False - hiding from the viewport
+        # removes the object from the view layer and the depsgraph would
+        # evaluate it with no shape keys, silently zeroing the motion audit.
+        # From here the procedural arches ARE the visible teeth; every
+        # downstream _set_morphs must drive them. Re-binding the
+        # corrective-objects dict is enough - _set_morphs sets
+        # jawOpen/viseme_aa on any object with those keys.
+        controlled=dict(controlled)
+        controlled.update({
+            'proc_upper_teeth':proc_objects['upper_teeth'],
+            'proc_lower_teeth':proc_objects['lower_teeth'],
+            'proc_upper_gum':proc_objects['upper_gum'],
+            'proc_lower_gum':proc_objects['lower_gum'],
+        })
+        proc_audits={}
+        for label,weights in (('jaw_open_0_85',POSES['jaw_open']),
+                              ('viseme_aa_0_90',POSES['viseme_aa']),
+                              ('viseme_pp_0_90',POSES['viseme_pp'])):
+            _set_morphs(body,weights,oral_assets=controlled)
+            proc_audits[label]=procedural_collision_audit(
+                proc_objects['upper_teeth'],proc_objects['lower_teeth'],
+                actual_assets['tongue'],label)
+        _set_morphs(body,POSES['neutral'],oral_assets=controlled)
+        proc_audits['neutral']=procedural_collision_audit(
+            proc_objects['upper_teeth'],proc_objects['lower_teeth'],
+            actual_assets['tongue'],'neutral')
+        _set_morphs(body,{},oral_assets=controlled)
+        proc_motion=procedural_motion_audit(
+            proc_objects['upper_teeth'],proc_objects['lower_teeth'])
+        if proc_motion['status']!='PASS_PROCEDURAL_LOWER_JAW_MOTION_UPPER_STABLE_NOT_VISUAL_QA':
+            raise RuntimeError('E_ID028_PROCEDURAL_MOTION: '+str(proc_motion))
+        # Visible-arch oral motion audit (the slab audit above stays as
+        # the source reference; this one audits the rendered teeth).
+        from character.anatomy_motion_audit import diagnose_oral_motion
+        visible_assets={'body':body,'teeth':proc_objects['lower_teeth'],
+                        'tongue':actual_assets['tongue']}
+        _set_morphs(body,{},oral_assets=controlled)
+        before_vis=_evaluated_world_vertices(visible_assets)
+        oral_motion_visible={}
+        for pose in ('jaw_open','viseme_aa'):
+            _set_morphs(body,POSES[pose],oral_assets=controlled)
+            after_vis=_evaluated_world_vertices(visible_assets)
+            oral_motion_visible[pose]=diagnose_oral_motion(
+                before_vis,after_vis,pose=pose)
+        _set_morphs(body,{},oral_assets=controlled)
+        mouth_anatomy_audit['collision_audits']=proc_audits
+        mouth_anatomy_audit['slab_collision_audits_reference']=slab_collision_reference
+        mouth_anatomy_audit['dental_rebuild']={
+            **proc_audit,
+            'lip_opening':lip_audit,
+            'procedural_jaw_motion':proc_motion,
+            'oral_motion_visible_lower_arch':oral_motion_visible,
+            'slab_hidden_from_renders':True,
+            'slab_viewport_hidden':False,
+            'slab_hide_render_archived':slab_hide_render_archived,
+            'slab_untouched':True,
+            'slab_collision_audits_reference':slab_collision_reference,
+            'teeth_collision_audits_visible':proc_audits,
+            'dental_visual_quality':'PENDING_INDEPENDENT_REVIEW',
+            'existing_glbs_modified':False,
+        }
+
     seam_jaw_motion_audit=None
     if seam_jaw_stills:
         from character.seamed_jaw_motion import audit_seamed_jaw_motion
@@ -1414,6 +1502,8 @@ if __name__=='__main__':
                         help='IDENTITY-027 tongue uniform scale (default pinned in tools/mouth_anatomy.py)')
     parser.add_argument('--tongue-shift-y',type=float,default=None,
                         help='IDENTITY-027 tongue posterior shift in m (bounded; default pinned)')
+    parser.add_argument('--procedural-dentition',action='store_true',
+                        help='IDENTITY-028 procedural permanent dentition replaces the photo slab; corrects the lip-opening border')
     parser.add_argument('--mhclo-dentition',action='store_true',
                         help='Use original MPFB teeth helper mapping instead of visual Z split')
     parser.add_argument('--oral-correctives',action='store_true',
@@ -1433,4 +1523,5 @@ if __name__=='__main__':
         oral_anatomy=args.oral_anatomy,
         upper_seat=args.upper_seat,tongue_seat=args.tongue_seat,
         tooth_scale=args.tooth_scale,lip_push=args.lip_push,
-        tongue_scale=args.tongue_scale,tongue_shift_y=args.tongue_shift_y)
+        tongue_scale=args.tongue_scale,tongue_shift_y=args.tongue_shift_y,
+        procedural_dentition=args.procedural_dentition)

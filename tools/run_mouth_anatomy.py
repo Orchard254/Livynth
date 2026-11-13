@@ -30,7 +30,8 @@ class MouthAnatomyError(ValueError):
 
 def command(blender,asset_plan,output,upper_seat=None,tongue_seat=None,
             tooth_scale=None,lip_push=None,
-            tongue_scale=None,tongue_shift_y=None):
+            tongue_scale=None,tongue_shift_y=None,
+            procedural_dentition=False):
     cmd=[
         str(blender),'--background','--python',
         str(ROOT/'tools/mpfb_anatomy_ab_blender.py'),'--',
@@ -51,6 +52,8 @@ def command(blender,asset_plan,output,upper_seat=None,tongue_seat=None,
         cmd+=['--tongue-scale',str(float(tongue_scale))]
     if tongue_shift_y is not None:
         cmd+=['--tongue-shift-y',str(float(tongue_shift_y))]
+    if procedural_dentition:
+        cmd+=['--procedural-dentition']
     return cmd
 
 
@@ -193,11 +196,59 @@ def validate_report(data,output):
             fix.get('tongue',{}).get('selected_vertices')!=226):
         raise MouthAnatomyError('E_ID025_FIX_CONTRACT')
 
+    rebuild=fix.get('dental_rebuild')
+    if rebuild is not None:
+        # IDENTITY-028 hard gate: the procedural arches are the rendered
+        # teeth; they must clear each other and the tongue in every pose.
+        if (rebuild.get('schema')!='livynth.procedural-dentition.v1' or
+                rebuild.get('assembly')!=
+                    'PARAMETRIC_PERMANENT_DENTITION_ADULT_ANTHROPOMETRY' or
+                rebuild.get('slab_hidden_from_renders') is not True or
+                rebuild.get('slab_untouched') is not True or
+                rebuild.get('dental_visual_quality')!=
+                    'PENDING_INDEPENDENT_REVIEW'):
+            raise MouthAnatomyError('E_ID028_REBUILD_CONTRACT')
+        teeth=rebuild.get('teeth',{})
+        gums=rebuild.get('gum_bands',{})
+        if set(teeth)!={'upper','lower'} or set(gums)!={'upper_gum','lower_gum'}:
+            raise MouthAnatomyError('E_ID028_OBJECT_SET')
+        for arch,record in teeth.items():
+            if (record.get('tooth_count')!=16 or
+                    len(record.get('fdi_numbers',[]))!=16 or
+                    len(set(record['fdi_numbers']))!=16):
+                raise MouthAnatomyError('E_ID028_TOOTH_COUNT_'+arch)
+        if (rebuild['teeth']['upper']['fdi_numbers'] and
+                rebuild['teeth']['lower']['fdi_numbers'] and
+                len(set(rebuild['teeth']['upper']['fdi_numbers'] +
+                        rebuild['teeth']['lower']['fdi_numbers']))!=32):
+            raise MouthAnatomyError('E_ID028_FDI_DUPLICATES')
+        for pose in ('jaw_open_0_85','neutral','viseme_aa_0_90','viseme_pp_0_90'):
+            audit=fix['collision_audits'].get(pose,{})
+            arch_int=audit.get('upper_lower_arch_intersections',{})
+            tongue_int=audit.get('tongue_teeth_intersections',{})
+            if (arch_int.get('pairs')!=0 or tongue_int.get('pairs')!=0):
+                raise MouthAnatomyError('E_ID028_COLLISION_'+pose)
+        motion=rebuild.get('procedural_jaw_motion',{})
+        if (motion.get('status')!=
+                'PASS_PROCEDURAL_LOWER_JAW_MOTION_UPPER_STABLE_NOT_VISUAL_QA' or
+                motion.get('upper_max_displacement_m',1.0)>2e-4 or
+                not (0.001<=motion.get('lower_median_displacement_m',0.0)<=0.030)):
+            raise MouthAnatomyError('E_ID028_PROCEDURAL_MOTION')
+        visible=rebuild.get('oral_motion_visible_lower_arch',{})
+        for pose in ('jaw_open','viseme_aa'):
+            if visible.get(pose,{}).get('status')!=\
+                    'ORAL_MOTION_PRESENT_NOT_VISUALLY_APPROVED':
+                raise MouthAnatomyError('E_ID028_VISIBLE_MOTION_'+pose)
+        lip=rebuild.get('lip_opening',{})
+        if (lip.get('operation')!='LIP_OPENING_RESHAPE' or
+                lip.get('max_displacement_m',1.0)>0.02 or
+                lip.get('selected_vertices',0)<10):
+            raise MouthAnatomyError('E_ID028_LIP_OPENING_AUDIT')
+
     after=fix.get('seamed_jaw_motion_after_fix')
     if (not isinstance(after,dict) or
             after.get('status')!='PASS_LOWER_JAW_MOTION_UPPER_STABLE_NOT_VISUAL_QA'):
         raise MouthAnatomyError('E_ID025_AFTER_FIX_MOTION')
-
     reverify=data.get('installed_mhclo_reverified')
     if (not isinstance(reverify,dict) or set(reverify)!={'eyes','teeth','tongue'} or
             any(not isinstance(v,dict) or v.get('unchanged') is not True
@@ -217,7 +268,8 @@ def validate_report(data,output):
 
 def run(blender,asset_plan,output,*,execute=subprocess.run,
         upper_seat=None,tongue_seat=None,tooth_scale=None,lip_push=None,
-        tongue_scale=None,tongue_shift_y=None):
+        tongue_scale=None,tongue_shift_y=None,
+        procedural_dentition=False):
     output=Path(output).resolve()
     if output.exists() or output.is_symlink():
         raise FileExistsError('E_ID025_OUTPUT_EXISTS')
@@ -225,7 +277,8 @@ def run(blender,asset_plan,output,*,execute=subprocess.run,
                              upper_seat=upper_seat,tongue_seat=tongue_seat,
                              tooth_scale=tooth_scale,lip_push=lip_push,
                              tongue_scale=tongue_scale,
-                             tongue_shift_y=tongue_shift_y),
+                             tongue_shift_y=tongue_shift_y,
+                             procedural_dentition=procedural_dentition),
                      cwd=str(ROOT),check=False)
     report_path=output/'anatomy_pose_report.json'
     if not report_path.is_file():
@@ -258,6 +311,7 @@ def main(argv=None):
     parser.add_argument('--lip-push',type=float,default=None)
     parser.add_argument('--tongue-scale',type=float,default=None)
     parser.add_argument('--tongue-shift-y',type=float,default=None)
+    parser.add_argument('--procedural-dentition',action='store_true')
     args=parser.parse_args(argv)
     from livynth_studio import find_blender
     output=args.out or (ROOT/'output/mouth_anatomy'/
@@ -267,7 +321,8 @@ def main(argv=None):
                          upper_seat=args.upper_seat,tongue_seat=args.tongue_seat,
                          tooth_scale=args.tooth_scale,lip_push=args.lip_push,
                          tongue_scale=args.tongue_scale,
-                         tongue_shift_y=args.tongue_shift_y)
+                         tongue_shift_y=args.tongue_shift_y,
+                         procedural_dentition=args.procedural_dentition)
     except (OSError,ValueError,RuntimeError) as exc:
         parser.exit(2,'LIVYNTH IDENTITY-025 FAIL: '+str(exc)+
                     '\nGenerated files if any: '+str(output)+'\n')
@@ -291,6 +346,26 @@ def main(argv=None):
         'material_isolation_verified':
             data['mouth_anatomy_audit']['material_isolation_verified'],
         'installed_mhclo_reverified':data['installed_mhclo_reverified'],
+        'dental_rebuild':(
+            {
+                'tooth_count':sum(
+                    data['mouth_anatomy_audit']['dental_rebuild']['teeth'][a]['tooth_count']
+                    for a in ('upper','lower')),
+                'teeth_collision_pairs_arch':{
+                    pose:audit['upper_lower_arch_intersections']['pairs']
+                    for pose,audit in
+                    data['mouth_anatomy_audit']['collision_audits'].items()},
+                'teeth_collision_pairs_tongue':{
+                    pose:audit['tongue_teeth_intersections']['pairs']
+                    for pose,audit in
+                    data['mouth_anatomy_audit']['collision_audits'].items()},
+                'slab_hidden_from_renders':
+                    data['mouth_anatomy_audit']['dental_rebuild'][
+                        'slab_hidden_from_renders'],
+                'procedural_jaw_motion':
+                    data['mouth_anatomy_audit']['dental_rebuild'][
+                        'procedural_jaw_motion']['status'],
+            } if 'dental_rebuild' in data['mouth_anatomy_audit'] else None),
         'collision_audits':{
             pose:{
                 'arch_pairs':audit['upper_lower_arch_intersections']['pairs'],

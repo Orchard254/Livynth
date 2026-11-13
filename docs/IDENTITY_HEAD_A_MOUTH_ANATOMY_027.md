@@ -1,5 +1,13 @@
 # IDENTITY-027 — Head A mouth anatomy, third pass (2026-11-12)
 
+> **Superseded by IDENTITY-028 (2026-11-13):** the dental-arch delivery was
+> rebuilt as a parametric permanent dentition replacing the photo slab in
+> renders (`--procedural-dentition`); arch↔arch crossings now measure
+> **zero in all four poses** on the rebuilt arches and the lip-opening
+> border was corrected. Detector-correction, material-isolation proof,
+> tongue fix, upper-seat pin and cavity validation from this report remain
+> valid and unchanged. See `docs/IDENTITY_HEAD_A_MOUTH_ANATOMY_028.md`.
+
 Branch: `fix/head-a-mouth-anatomy` (stacked on `diagnostic/identity-024-dental-arch-isolation`, tip `48302a1`).
 Runner: `python tools/run_mouth_anatomy.py` (opt-in `--oral-anatomy` path, same five-pose mouth closeup).
 

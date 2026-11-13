@@ -8,11 +8,13 @@ from tools.mouth_anatomy import (
     SCHEMA,UPPER_SEAT_M,TONGUE_SEAT_M,TOOTH_SCALE,LIP_MAX_PUSH_M,
     LIP_Z_CENTER,LIP_Z_HALF_SPAN,LIP_X_HALF_SPAN,MIN_TOOTH_SCALE,MAX_TOOTH_SCALE,
     TONGUE_SCALE,TONGUE_SHIFT_Y_M,MAX_TONGUE_SHIFT_Y_M,
+    LIP_CORNER_LIFT_M,LIP_LOWER_ROLL_PUSH_M,MAX_LIP_OPENING_PUSH_M,
     TEETH_GUM_TONE,TEETH_GUM_MUTE_STRENGTH,
     validate_seat,plan_masked_translation,plan_translation,
     plan_cavity_faces,cavity_z_window,validate_tooth_scale,validate_lip_push,
     validate_tongue_scale,validate_tongue_shift_y,sha256_of_float_array,
     plan_uniform_scale,plan_lip_soften,validate_polygon_correspondence,
+    plan_lip_opening,
     nearest_triangle_distances,distance_summary,
     classify_gum_pixels,mute_gum_pixels,
     count_intersecting_triangle_pairs,
@@ -821,6 +823,62 @@ class ArrayHashTests(unittest.TestCase):
         digest = sha256_of_float_array(a)
         self.assertEqual(len(digest), 64)
         int(digest, 16)
+
+
+class LipOpeningTests(unittest.TestCase):
+    def _points(self):
+        # mouth band sample: corners low, chin band, upper lip untouched
+        rng = np.random.default_rng(7)
+        return np.concatenate([
+            np.array([[0.0405, -0.180, 1.4925],
+                      [-0.0405, -0.180, 1.4925],
+                      [0.0350, -0.185, 1.5000],
+                      [0.0, -0.190, 1.4630],
+                      [0.0, -0.190, 1.4550],
+                      [0.0, -0.190, 1.4800],
+                      [0.0600, -0.180, 1.4925],   # outside corner band
+                      [0.0, +0.080, 1.4630]]),    # back of the head
+            rng.uniform([-0.05, -0.25, 1.43], [0.05, -0.10, 1.55],
+                        size=(64, 3)),
+        ])
+
+    def test_corner_vertices_lift(self):
+        moved, audit = plan_lip_opening(self._points())
+        corner = moved[0] - self._points()[0]
+        self.assertAlmostEqual(corner[2], LIP_CORNER_LIFT_M, delta=1e-12)
+        self.assertEqual(corner[0], 0.0)
+        mirror = moved[1] - self._points()[1]
+        self.assertAlmostEqual(mirror[2], LIP_CORNER_LIFT_M, delta=1e-12)
+
+    def test_lower_roll_moves_forward(self):
+        pts = self._points()
+        moved, audit = plan_lip_opening(pts)
+        lower = moved[3] - pts[3]
+        self.assertLess(lower[1], 0.0)   # pushed forward (-Y)
+        self.assertEqual(lower[2], 0.0)
+        self.assertTrue(audit['lower_roll_selected_vertices'] > 0)
+        self.assertTrue(audit['corner_selected_vertices'] > 0)
+
+    def test_upper_front_and_back_of_head_unchanged(self):
+        pts = self._points()
+        moved, audit = plan_lip_opening(pts)
+        self.assertEqual(audit['stationary_vertices'] + audit['selected_vertices'],
+                         len(pts))
+        np.testing.assert_allclose(moved[[6, 7]], pts[[6, 7]], atol=1e-12)
+
+    def test_max_displacement_bounded(self):
+        pts = self._points()
+        moved, audit = plan_lip_opening(pts)
+        self.assertLessEqual(audit['max_displacement_m'],
+                             math.sqrt(LIP_CORNER_LIFT_M ** 2 +
+                                       LIP_LOWER_ROLL_PUSH_M ** 2))
+
+    def test_bad_inputs_raise(self):
+        pts = self._points()
+        with self.assertRaises(MouthAnatomyError):
+            plan_lip_opening(pts, corner_lift=-0.1)
+        with self.assertRaises(MouthAnatomyError):
+            plan_lip_opening(pts, lower_roll_push=float('nan'))
 
 
 if __name__=='__main__':

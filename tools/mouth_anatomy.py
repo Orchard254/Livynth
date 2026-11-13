@@ -70,6 +70,19 @@ EXTERIOR_BASE_COLOR = (0.760, 0.745, 0.720, 1.0)
 CAVITY_ROUGHNESS = 0.92
 EXTERIOR_ROUGHNESS = 0.62
 
+# IDENTITY-028 lip-opening correction: bounded, localised skin reshaping.
+LIP_CORNER_Z_CENTER = 1.4925
+LIP_CORNER_Z_HALF_SPAN = 0.0235
+LIP_CORNER_X_MIN = 0.029
+LIP_CORNER_X_PEAK = 0.0405
+LIP_CORNER_X_HALF_SPAN = 0.011
+LIP_CORNER_LIFT_M = 0.0016
+LIP_LOWER_ROLL_Z_CENTER = 1.4630
+LIP_LOWER_ROLL_Z_HALF_SPAN = 0.0230
+LIP_LOWER_ROLL_X_HALF_SPAN = 0.044
+LIP_LOWER_ROLL_PUSH_M = 0.0022
+MAX_LIP_OPENING_PUSH_M = 0.020
+
 
 class MouthAnatomyError(ValueError):
     pass
@@ -255,6 +268,68 @@ def plan_lip_soften(points, *, z_center=LIP_Z_CENTER,
         'x_half_span_m': round(float(x_half_span), 6),
         'front_y_gate_m': round(float(front_y_gate), 6),
         'max_push_m': round(float(max_push), 9),
+        'label': label,
+    }
+
+
+def plan_lip_opening(points, *, corner_lift=LIP_CORNER_LIFT_M,
+                     lower_roll_push=LIP_LOWER_ROLL_PUSH_M, label='LIP_OPENING'):
+    """Reshape the lip-opening border of the copied skin, bounded and local.
+
+    Two ops, no new anatomy is invented and the mouth slit stays the same
+    slit - the border reads as a calmer, fuller human mouth instead of a
+    flat ellipse:
+
+    1. CORNER RAISE: vertices near the mouth corners (|x| in the corner
+       band, z within the corner window) are lifted along +Z with a
+       quartic falloff peaked at ``LIP_CORNER_X_PEAK`` - de-stern the
+       downturned corners toward a natural almond.
+    2. LOWER-ROLL PROTRUSION: vertices in the lower lip/chin band are
+       pushed forward (-Y) with a quartic falloff in z centred on the
+       lower roll. Balances the face that is otherwise strongly
+       retrusive below the mouth (measured: chin band front at
+       y ~= -0.07 while the upper lip reaches -0.16).
+
+    Callers apply the identical per-vertex delta to Basis and every
+    corrective key block (same shape-key-safe pattern as the sulcus
+    lift). Pure function; measured, bounded, never touches other regions.
+    """
+    p = _points(points, label)
+    if not (math.isfinite(corner_lift) and 0.0 <= corner_lift <= MAX_LIP_OPENING_PUSH_M):
+        raise MouthAnatomyError('E_LIP_CORNER_LIFT_' + label)
+    if not (math.isfinite(lower_roll_push) and 0.0 <= lower_roll_push <= MAX_LIP_OPENING_PUSH_M):
+        raise MouthAnatomyError('E_LIP_LOWER_ROLL_' + label)
+    z = p[:, 2]
+    xabs = np.abs(p[:, 0])
+    front = p[:, 1] < 0.0
+
+    # op 1: corner raise (dz) with quartic falloffs in x and z
+    wx = np.clip(1.0 - ((xabs - LIP_CORNER_X_PEAK) / LIP_CORNER_X_HALF_SPAN) ** 2, 0.0, 1.0) ** 2
+    wx *= (xabs >= LIP_CORNER_X_MIN)
+    wz = np.clip(1.0 - ((z - LIP_CORNER_Z_CENTER) / LIP_CORNER_Z_HALF_SPAN) ** 2, 0.0, 1.0) ** 2
+    w_corner = np.where(front, wx * wz, 0.0)
+
+    # op 2: lower-roll protrusion (dy, forward = -Y) with quartic falloffs
+    wz2 = np.clip(1.0 - ((z - LIP_LOWER_ROLL_Z_CENTER) / LIP_LOWER_ROLL_Z_HALF_SPAN) ** 2, 0.0, 1.0) ** 2
+    wx2 = np.clip(1.0 - (xabs / LIP_LOWER_ROLL_X_HALF_SPAN) ** 2, 0.0, 1.0) ** 2
+    w_lower = np.where(front, wx2 * wz2, 0.0)
+
+    moved = p.copy()
+    moved[:, 2] = p[:, 2] + corner_lift * w_corner
+    moved[:, 1] = p[:, 1] - lower_roll_push * w_lower
+    displacements = np.linalg.norm(moved - p, axis=1)
+    return moved, {
+        'schema': SCHEMA,
+        'operation': 'LIP_OPENING_RESHAPE',
+        'selected_vertices': int(((w_corner > 0.0) | (w_lower > 0.0)).sum()),
+        'corner_selected_vertices': int((w_corner > 0.0).sum()),
+        'lower_roll_selected_vertices': int((w_lower > 0.0).sum()),
+        'stationary_vertices': int(((w_corner == 0.0) & (w_lower == 0.0)).sum()),
+        'corner_lift_m': round(float(corner_lift), 9),
+        'lower_roll_push_m': round(float(lower_roll_push), 9),
+        'max_displacement_m': round(float(displacements.max()), 9),
+        'corner_z_center_m': LIP_CORNER_Z_CENTER,
+        'lower_roll_z_center_m': LIP_LOWER_ROLL_Z_CENTER,
         'label': label,
     }
 
