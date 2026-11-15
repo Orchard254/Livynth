@@ -125,7 +125,7 @@ def _tint_teeth(objects, upper_material, lower_material):
 
 
 def capture_oral_visibility(scene, body, objects, tongue, render, set_pose, *,
-                            poses, stage, update=None):
+                            poses, stage, update=None, cavity_indexes=None):
     """Render the IDENTITY-029 diagnostic frames for every pose.
 
     ``render(name)`` writes ``<name>.png`` into the run output folder and
@@ -199,13 +199,25 @@ def capture_oral_visibility(scene, body, objects, tongue, render, set_pose, *,
                 objects[key].hide_render = True
             if tongue is not None:
                 tongue.hide_render = True
-            restored = body_slots[cavity_slot]
+            # Geometry-grounded aperture: paint the cavity-opening polygons
+            # (from the BVH audit) with the flat green material so the
+            # aperture mask is recovered from actual cavity geometry rather
+            # than a luminance threshold. Restore material indices after.
+            original_indices = None
+            if cavity_indexes:
+                original_indices = [body.data.polygons[i].material_index
+                                    for i in cavity_indexes]
             _set_slot_materials(body, body_slots)
             body.data.materials[cavity_slot] = cavity_material
+            if cavity_indexes:
+                for i in cavity_indexes:
+                    body.data.polygons[i].material_index = cavity_slot
             update()
             images.append(render(prefix + '_aperture'))
+            if original_indices is not None:
+                for idx, i in enumerate(cavity_indexes):
+                    body.data.polygons[i].material_index = original_indices[idx]
             _set_slot_materials(body, body_slots)
-            body.data.materials[cavity_slot] = restored
             update()
 
     return {

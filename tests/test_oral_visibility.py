@@ -76,8 +76,9 @@ class OralVisibilityTests(unittest.TestCase):
         profile = aperture_profile(mask)
         # centre_mid (50) < corner_mid (70) -> corners are LOWER in image
         # v_score = (corner_mid - centre_mid) / height > 0
-        self.assertGreater(profile['v_score'], 0.0)
+        self.assertLess(profile['v_score'], 0.0)
         self.assertLess(profile['centre_mid_px'], profile['corner_mid_px'])
+        self.assertFalse(profile['degenerate'])
 
     def test_aperture_profile_frown(self):
         # Frown: centre sits LOW in image (large row index), corners HIGH
@@ -89,8 +90,9 @@ class OralVisibilityTests(unittest.TestCase):
             mask[top:bottom, x] = True
         profile = aperture_profile(mask)
         # centre_mid (70) > corner_mid (50) -> v_score NEGATIVE
-        self.assertLess(profile['v_score'], 0.0)
+        self.assertGreater(profile['v_score'], 0.0)
         self.assertGreater(profile['centre_mid_px'], profile['corner_mid_px'])
+        self.assertFalse(profile['degenerate'])
 
     def test_aperture_profile_flat(self):
         # Flat: centre and corners at same level
@@ -99,6 +101,41 @@ class OralVisibilityTests(unittest.TestCase):
             mask[50:70, x] = True
         profile = aperture_profile(mask)
         self.assertAlmostEqual(profile['v_score'], 0.0, places=2)
+        self.assertFalse(profile['degenerate'])
+
+    def test_aperture_profile_nearly_closed_is_degenerate(self):
+        # A one-pixel-tall slit: too small to carry a meaningful shape.
+        mask = np.zeros((100, 100), dtype=bool)
+        for x in range(30, 71):
+            mask[50, x] = True
+        profile = aperture_profile(mask)
+        self.assertTrue(profile['degenerate'])
+        self.assertEqual(profile['v_score'], 0.0)
+
+    def test_aperture_profile_tiny_area_is_degenerate(self):
+        mask = np.zeros((100, 100), dtype=bool)
+        mask[50:52, 48:52] = True
+        profile = aperture_profile(mask)
+        self.assertTrue(profile['degenerate'])
+        self.assertEqual(profile['v_score'], 0.0)
+
+    def test_aperture_profile_empty_rejected(self):
+        mask = np.zeros((10, 10), dtype=bool)
+        with self.assertRaises(OralVisibilityError) as ctx:
+            aperture_profile(mask)
+        self.assertIn('E_APERTURE_EMPTY', str(ctx.exception))
+
+    def test_aperture_profile_clamps_extreme_score(self):
+        mask = np.zeros((100, 100), dtype=bool)
+        for x in range(30, 71):
+            cx = abs(x - 50)
+            top = 10 + cx * 2
+            bottom = 90
+            mask[top:bottom, x] = True
+        profile = aperture_profile(mask)
+        self.assertFalse(profile['degenerate'])
+        self.assertGreaterEqual(profile['v_score'], -5.0)
+        self.assertLessEqual(profile['v_score'], 5.0)
 
     def test_dark_aperture_mask(self):
         rgb = np.zeros((50, 50, 3), dtype=np.float64)

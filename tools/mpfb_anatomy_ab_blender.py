@@ -1295,7 +1295,8 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
 
         diag_before = capture_oral_visibility(
             scene, body, proc_objects, actual_assets['tongue'],
-            render_diag, set_pose, poses=poses, stage='before')
+            render_diag, set_pose, poses=poses, stage='before',
+            cavity_indexes=mouth_anatomy_audit.get('cavity_indexes'))
         oral_visibility_audit = {'before': diag_before}
 
         # --- 'after' stage: apply the almond reshape --------------------
@@ -1303,7 +1304,10 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
 
         # --- extended collision audit (after almond) --------------------
         full_audits = {}
-        for label, weights in (('neutral', POSES['neutral']),):  # just neutral for speed
+        for label, weights in (('neutral', POSES['neutral']),
+                               ('jaw_open', POSES['jaw_open']),
+                               ('viseme_aa', POSES['viseme_aa']),
+                               ('viseme_pp', POSES['viseme_pp'])):
             _set_morphs(body, weights, oral_assets=controlled)
             full_audits[label] = oral_collision_audit_full(
                 body,
@@ -1317,7 +1321,8 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
 
         diag_after = capture_oral_visibility(
             scene, body, proc_objects, actual_assets['tongue'],
-            render_diag, set_pose, poses=poses, stage='after')
+            render_diag, set_pose, poses=poses, stage='after',
+            cavity_indexes=mouth_anatomy_audit.get('cavity_indexes'))
         oral_visibility_audit['after'] = diag_after
         oral_visibility_audit['lip_almond'] = lip_almond_audit
         oral_visibility_audit['extended_collision'] = full_audits
@@ -1347,7 +1352,10 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
                        indent=2)+'\n',encoding='utf-8')
         raise RuntimeError('E_ID022_ORAL_MOTION_BEFORE_RENDER')
     images=[]
-    oral_visibility_audit=None
+    # Preserve the IDENTITY-029 diagnostic audit populated above;
+    # only reset when the diagnostic block did not run.
+    if not (procedural_dentition and oral_visibility):
+        oral_visibility_audit = None
     dental_arch_location_audit=None
     dental_arch_render_audit=None
     if oral_anatomy:

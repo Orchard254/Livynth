@@ -72,11 +72,14 @@ def measure_pose(folder, pose, *, stage, tolerance=COLOR_TOLERANCE):
                        tolerance=tolerance)
     visible = _arch_masks(folder / (prefix + '_visible.png'),
                           tolerance=tolerance)
-    # Use dark aperture mask on the VISIBLE render (clay exterior)
-    # rather than the cavity render which shows the full interior.
-    visible_image = _load(folder / (prefix + '_visible.png'))
-    aperture = dark_aperture_mask(
-        visible_image[:, :, :3], max_luma=0.42) & alpha_mask(visible_image)
+    # Geometry-grounded aperture: the diagnostic renders the oral cavity
+    # polygons with a flat green emission material, so the aperture mask
+    # is recovered from the actual cavity geometry instead of a luminance
+    # threshold that can mistake coloured teeth or gums for the opening.
+    aperture_image = _load(folder / (prefix + '_aperture.png'))
+    aperture = cavity_aperture_mask(
+        aperture_image[:, :, :3], cavity_color=DIAG_CAVITY_RGB,
+        tolerance=tolerance) & alpha_mask(aperture_image)
     record = {
         'stage': stage,
         'pose': pose,

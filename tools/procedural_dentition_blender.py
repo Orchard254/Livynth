@@ -501,16 +501,17 @@ def oral_collision_audit_full(body, upper_obj, lower_obj, tongue_obj,
     from tools.mpfb_anatomy_ab_blender import _evaluated_world_vertices
     from tools.mouth_anatomy import describe_intersecting_triangle_pairs
     snapshot = _evaluated_world_vertices({
-        'upper': upper_obj, 'lower': lower_obj, 'tongue': tongue_obj,
-        'upper_gum': upper_gum_obj, 'lower_gum': lower_gum_obj})
+        'body': body, 'upper': upper_obj, 'lower': lower_obj,
+        'tongue': tongue_obj, 'upper_gum': upper_gum_obj,
+        'lower_gum': lower_gum_obj})
     upper_world = snapshot['upper']
     lower_world = snapshot['lower']
     tongue_world = snapshot['tongue']
     upper_gum_world = snapshot['upper_gum']
     lower_gum_world = snapshot['lower_gum']
-    body_world = np.asarray(
-        [tuple(body.matrix_world @ v.co) for v in body.data.vertices],
-        dtype=np.float64)
+    # Use the EVALUATED body geometry (skinning + morphs) so the lip
+    # band reflects the jaw/speech pose being audited, not the rest mesh.
+    body_world = snapshot['body']
 
     upper_tris = _world_mesh_triangles(upper_obj, upper_world)
     lower_tris = _world_mesh_triangles(lower_obj, lower_world)

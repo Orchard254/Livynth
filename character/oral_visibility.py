@@ -168,7 +168,15 @@ def aperture_profile(mask):
     centre_mid = 0.5 * (centre_top + centre_bottom)
     # V score: negative when the centre of the opening sits ABOVE the
     # corners (the inverted-V / "peak" defect), positive for a frown.
-    v_score = (corner_mid - centre_mid) / centre_height
+    MIN_VIABLE_HEIGHT_PX = 3.0
+    MIN_VIABLE_AREA_PX = 20
+    degenerate = bool(centre_height < MIN_VIABLE_HEIGHT_PX or
+                      area < MIN_VIABLE_AREA_PX)
+    if degenerate:
+        v_score = 0.0
+    else:
+        v_score = (centre_mid - corner_mid) / centre_height
+        v_score = max(-5.0, min(5.0, float(v_score)))
     return {
         'columns': int(len(xs)),
         'x_min': int(xs.min()),
@@ -186,6 +194,7 @@ def aperture_profile(mask):
         'corner_mid_px': round(corner_mid, 3),
         'centre_mid_px': round(centre_mid, 3),
         'v_score': round(float(v_score), 6),
+        'degenerate': bool(degenerate),
         'mean_aperture_height_px': round(float(span.mean()), 3),
         'max_aperture_height_px': round(float(span.max()), 3),
         'fill_ratio': round(float(area) / float(width_px * centre_height), 6)
