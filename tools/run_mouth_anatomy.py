@@ -54,6 +54,8 @@ def command(blender,asset_plan,output,upper_seat=None,tongue_seat=None,
         cmd+=['--tongue-shift-y',str(float(tongue_shift_y))]
     if procedural_dentition:
         cmd+=['--procedural-dentition']
+    if oral_visibility:
+        cmd+=['--oral-visibility']
     return cmd
 
 
@@ -269,7 +271,7 @@ def validate_report(data,output):
 def run(blender,asset_plan,output,*,execute=subprocess.run,
         upper_seat=None,tongue_seat=None,tooth_scale=None,lip_push=None,
         tongue_scale=None,tongue_shift_y=None,
-        procedural_dentition=False):
+        procedural_dentition=False,oral_visibility=False):
     output=Path(output).resolve()
     if output.exists() or output.is_symlink():
         raise FileExistsError('E_ID025_OUTPUT_EXISTS')
@@ -312,6 +314,7 @@ def main(argv=None):
     parser.add_argument('--tongue-scale',type=float,default=None)
     parser.add_argument('--tongue-shift-y',type=float,default=None)
     parser.add_argument('--procedural-dentition',action='store_true')
+    parser.add_argument('--oral-visibility',action='store_true')
     args=parser.parse_args(argv)
     from livynth_studio import find_blender
     output=args.out or (ROOT/'output/mouth_anatomy'/
@@ -322,7 +325,8 @@ def main(argv=None):
                          tooth_scale=args.tooth_scale,lip_push=args.lip_push,
                          tongue_scale=args.tongue_scale,
                          tongue_shift_y=args.tongue_shift_y,
-                         procedural_dentition=args.procedural_dentition)
+                         procedural_dentition=args.procedural_dentition,
+                         oral_visibility=args.oral_visibility)
     except (OSError,ValueError,RuntimeError) as exc:
         parser.exit(2,'LIVYNTH IDENTITY-025 FAIL: '+str(exc)+
                     '\nGenerated files if any: '+str(output)+'\n')

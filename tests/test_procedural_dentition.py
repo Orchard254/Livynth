@@ -186,32 +186,50 @@ class ArchCollisionTests(unittest.TestCase):
 
 
 class GumBandTests(unittest.TestCase):
-    def test_gum_inner_ring_clears_local_tooth_caps(self):
-        from character.procedural_dentition import _neck_z
-        spec = build_dentition()
+    def test_gum_cej_ring_at_cervical_margin(self):
+        """CEJ ring (ring 0) sits at the cervical margin of each tooth."""
+        from character.procedural_dentition import _neck_z, arch_tooth_at
         for arch in ('upper', 'lower'):
             half_width = ARCH_PARAMS[arch]['half_width']
             xs = np.linspace(-half_width, half_width, GUM_SAMPLES)
             verts, _ = gum_band(arch)
-            n = verts.shape[0] // 3
-            teeth = spec[arch]
+            n = GUM_SAMPLES
+            for j in range(n):
+                tooth, _u = arch_tooth_at(arch, xs[j])
+                cls = tooth['cls']
+                nz = _neck_z(arch, cls, xs[j], params=ARCH_PARAMS)
+                # CEJ ring is ring 0
+                ring_z = verts[j, 2]
+                # CEJ is at the neck minus the scallop (contacts lift the
+                # margin), so it can sit up to one scallop amplitude below
+                self.assertAlmostEqual(ring_z, nz, delta=0.0018 + 1e-6)
+
+    def test_gum_free_margin_apical_to_cej(self):
+        """Free gingival margin (ring 1) is apical to CEJ."""
+        from character.procedural_dentition import _neck_z, arch_tooth_at
+        for arch in ('upper', 'lower'):
+            half_width = ARCH_PARAMS[arch]['half_width']
+            xs = np.linspace(-half_width, half_width, GUM_SAMPLES)
+            verts, _ = gum_band(arch)
+            n = GUM_SAMPLES
             sign = 1 if arch == 'upper' else -1
             for j in range(n):
-                nearest = min(teeth, key=lambda pl:
-                              abs(pl['origin_body_m'][0] - xs[j]))
-                cls = nearest['cls']
+                tooth, _u = arch_tooth_at(arch, xs[j])
+                cls = tooth['cls']
                 nz = _neck_z(arch, cls, xs[j], params=ARCH_PARAMS)
-                ring_z = verts[j, 2]
-                if sign == 1:  # inner edge never dips past the scallop
-                    self.assertGreater(ring_z, nz - 0.0018)
-                else:          # mirrored for the lower arch
-                    self.assertLess(ring_z, nz + 0.0018)
+                # Free margin is ring 1
+                ring_z = verts[n + j, 2]
+                if sign == 1:  # upper: free margin is lower (more negative z)
+                    self.assertLess(ring_z, nz)
+                else:          # lower: free margin is higher (more positive z)
+                    self.assertGreater(ring_z, nz)
 
     def test_gum_face_count_and_topology(self):
         for arch in ('upper', 'lower'):
             verts, faces = gum_band(arch)
-            self.assertEqual(len(verts), 3 * 96)
-            self.assertEqual(len(faces), 382)
+            self.assertEqual(len(verts), 4 * 96)  # 4 rings * 96 samples
+            # 3 inter-ring quad strips * (95 quads * 2 tris) + 2 end caps * 2 tris
+            self.assertEqual(len(faces), 3 * 95 * 2 + 2 * 2)
 
 
 if __name__ == '__main__':

@@ -467,31 +467,65 @@ def _triangles_intersect(a0, a1, a2, b0, b1, b2, **kwargs):
 
 
 def _iter_candidate_pairs(tris_a, tris_b, *, aabb_margin):
-    """Shared broadphase: AABB-overlap triangle pairs, sorted z-window."""
+    """Shared broadphase: AABB-overlap triangle pairs.
+
+    Triangles of B are bucketed into a uniform z-grid, so a triangle of A
+    only visits the buckets its own z-span touches instead of scanning
+    every triangle of B below it. The previous linear scan was O(N*M) in
+    the worst case and made the millimetre-scale audits (tens of
+    thousands of triangles) take minutes; this is O(N + M + overlaps).
+
+    The yielded ``j_orig`` index is the ORIGINAL index in ``tris_b``.
+    """
     a_min = tris_a.min(axis=1)
     a_max = tris_a.max(axis=1)
     b_min = tris_b.min(axis=1)
     b_max = tris_b.max(axis=1)
-    order = np.argsort(b_min[:, 2])
-    b_min = b_min[order]
-    b_max = b_max[order]
-    tris_b = tris_b[order]
+    # uniform z-grid sized so a typical triangle touches a handful of bins
+    span = float(b_max[:, 2].max() - b_min[:, 2].min())
+    if not math.isfinite(span) or span <= 0.0:
+        # degenerate z range: fall back to a single bin
+        bin_count = 1
+        origin_z = float(b_min[:, 2].min())
+        bin_height = 1.0
+    else:
+        bin_count = max(1, min(512, int(math.sqrt(len(tris_b))) + 1))
+        origin_z = float(b_min[:, 2].min())
+        bin_height = span / bin_count
+    b_bin = np.clip(
+        ((b_min[:, 2] - origin_z) / bin_height).astype(np.int64),
+        0, bin_count - 1)
+    b_bin_top = np.clip(
+        ((b_max[:, 2] - origin_z) / bin_height).astype(np.int64),
+        0, bin_count - 1)
+    buckets = [[] for _ in range(bin_count)]
+    for j in range(len(tris_b)):
+        for b in range(b_bin[j], b_bin_top[j] + 1):
+            buckets[b].append(j)
     for i in range(len(tris_a)):
-        zlo = a_min[i, 2] - aabb_margin
-        zhi = a_max[i, 2] + aabb_margin
-        left = np.searchsorted(b_min[:, 2], zhi, side='right')
-        for j in range(left):
-            if b_max[j, 2] < zlo:
-                continue
-            if b_max[j, 1] < a_min[i, 1] - aabb_margin:
-                continue
-            if b_min[j, 1] > a_max[i, 1] + aabb_margin:
-                continue
-            if b_max[j, 0] < a_min[i, 0] - aabb_margin:
-                continue
-            if b_min[j, 0] > a_max[i, 0] + aabb_margin:
-                continue
-            yield i, j, int(order[j]), tris_b[j]
+        lo = float(a_min[i, 2]) - aabb_margin
+        hi = float(a_max[i, 2]) + aabb_margin
+        first = int(np.clip(((lo - origin_z) / bin_height),
+                            0, bin_count - 1))
+        last = int(np.clip(((hi - origin_z) / bin_height),
+                           0, bin_count - 1))
+        seen = set()
+        for b in range(first, last + 1):
+            for j in buckets[b]:
+                if j in seen:
+                    continue
+                seen.add(j)
+                if b_max[j, 2] < lo:
+                    continue
+                if b_max[j, 1] < a_min[i, 1] - aabb_margin:
+                    continue
+                if b_min[j, 1] > a_max[i, 1] + aabb_margin:
+                    continue
+                if b_max[j, 0] < a_min[i, 0] - aabb_margin:
+                    continue
+                if b_min[j, 0] > a_max[i, 0] + aabb_margin:
+                    continue
+                yield i, j, tris_b[j]
 
 
 def _plane_extent(points, triangle0, triangle1, triangle2):
@@ -518,8 +552,8 @@ def _iter_transversal_crossings(A, B, *, aabb_margin):
     """Yield (index_a, index_b_original, triangle_a, triangle_b) pairs that
     cross transversally. Shared by count_ and describe_ so they cannot
     drift apart. Tangential/coplanar touches are not yielded."""
-    for i, j, j_orig, tri_b in _iter_candidate_pairs(A, B,
-                                                     aabb_margin=aabb_margin):
+    for i, j_orig, tri_b in _iter_candidate_pairs(A, B,
+                                                  aabb_margin=aabb_margin):
         tri_a = A[i]
         if _triangles_intersect(tri_a[0], tri_a[1], tri_a[2],
                                 tri_b[0], tri_b[1], tri_b[2]):
