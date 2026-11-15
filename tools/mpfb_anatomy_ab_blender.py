@@ -899,7 +899,7 @@ def _audit_jaw_and_visemes(body,assets,*,use_oral_correctives=False):
     return reports
 
 
-def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False,mhclo_dentition=False,rigged_seam_probe=False,seam_jaw_stills=False,oral_isolation=False,dental_arch_isolation=False,oral_anatomy=False,upper_seat=None,tongue_seat=None,tooth_scale=None,lip_push=None,tongue_scale=None,tongue_shift_y=None,procedural_dentition=False):
+def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=False,oral_correctives=False,mhclo_dentition=False,rigged_seam_probe=False,seam_jaw_stills=False,oral_isolation=False,dental_arch_isolation=False,oral_anatomy=False,upper_seat=None,tongue_seat=None,tooth_scale=None,lip_push=None,tongue_scale=None,tongue_shift_y=None,procedural_dentition=False,oral_visibility=False):
     import bpy
     import numpy as np
     from bl_ext.user_default.mpfb.services import (
@@ -1274,6 +1274,54 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
             'existing_glbs_modified':False,
         }
 
+    # IDENTITY-029: isolated dental-visibility and lip-aperture diagnostics
+    # (runs after the procedural dentition and the IDENTITY-028 lip-opening
+    # correction, so the 'before' stage reflects the IDENTITY-028 state and
+    # the 'after' stage reflects the almond reshape).
+    oral_visibility_audit = None
+    if procedural_dentition and oral_visibility:
+        from tools.procedural_dentition_blender import (
+            reshape_lip_almonder, oral_collision_audit_full)
+        from tools.oral_visibility_blender import capture_oral_visibility
+
+        poses = ('neutral', 'jaw_open', 'viseme_aa', 'viseme_pp')
+
+        # --- 'before' stage: after IDENTITY-028 corner lift -------------
+        def set_pose(name):
+            _set_morphs(body, POSES[name], oral_assets=controlled)
+
+        def render_diag(name):
+            return _render(scene, body, name, 0, output, oral_closeup=True)
+
+        diag_before = capture_oral_visibility(
+            scene, body, proc_objects, actual_assets['tongue'],
+            render_diag, set_pose, poses=poses, stage='before')
+        oral_visibility_audit = {'before': diag_before}
+
+        # --- 'after' stage: apply the almond reshape --------------------
+        lip_almond_audit = reshape_lip_almonder(body)
+
+        # --- extended collision audit (after almond) --------------------
+        full_audits = {}
+        for label, weights in (('neutral', POSES['neutral']),):  # just neutral for speed
+            _set_morphs(body, weights, oral_assets=controlled)
+            full_audits[label] = oral_collision_audit_full(
+                body,
+                proc_objects['upper_teeth'],
+                proc_objects['lower_teeth'],
+                actual_assets['tongue'],
+                proc_objects['upper_gum'],
+                proc_objects['lower_gum'],
+                label)
+            _set_morphs(body, POSES['neutral'], oral_assets=controlled)
+
+        diag_after = capture_oral_visibility(
+            scene, body, proc_objects, actual_assets['tongue'],
+            render_diag, set_pose, poses=poses, stage='after')
+        oral_visibility_audit['after'] = diag_after
+        oral_visibility_audit['lip_almond'] = lip_almond_audit
+        oral_visibility_audit['extended_collision'] = full_audits
+
     seam_jaw_motion_audit=None
     if seam_jaw_stills:
         from character.seamed_jaw_motion import audit_seamed_jaw_motion
@@ -1435,6 +1483,7 @@ def run(character,plan_file,output,*,align_accessories=False,audit_oral_motion=F
         'seamed_jaw_motion_audit':seam_jaw_motion_audit,
         'mouth_anatomy_audit':mouth_anatomy_audit,
         'oral_asset_visibility_audit':oral_visibility_audit,
+        'oral_visibility_audit':oral_visibility_audit,
         'dental_arch_location_audit':dental_arch_location_audit,
         'dental_arch_render_audit':dental_arch_render_audit,
         'oral_motion_audit':oral_motion_audit,
@@ -1504,6 +1553,8 @@ if __name__=='__main__':
                         help='IDENTITY-027 tongue posterior shift in m (bounded; default pinned)')
     parser.add_argument('--procedural-dentition',action='store_true',
                         help='IDENTITY-028 procedural permanent dentition replaces the photo slab; corrects the lip-opening border')
+    parser.add_argument('--oral-visibility',action='store_true',
+                        help='IDENTITY-029 isolated dental-visibility and lip-aperture diagnostics; requires --procedural-dentition')
     parser.add_argument('--mhclo-dentition',action='store_true',
                         help='Use original MPFB teeth helper mapping instead of visual Z split')
     parser.add_argument('--oral-correctives',action='store_true',
@@ -1524,4 +1575,5 @@ if __name__=='__main__':
         upper_seat=args.upper_seat,tongue_seat=args.tongue_seat,
         tooth_scale=args.tooth_scale,lip_push=args.lip_push,
         tongue_scale=args.tongue_scale,tongue_shift_y=args.tongue_shift_y,
-        procedural_dentition=args.procedural_dentition)
+        procedural_dentition=args.procedural_dentition,
+        oral_visibility=args.oral_visibility)

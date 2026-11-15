@@ -297,21 +297,20 @@ def _storage_check(objects, expected_upper, expected_lower,
     return True
 
 
-def reshape_lip_opening(body):
-    """Shape-key-safe lip-opening border correction on the copied body.
+def _apply_body_vertex_plan(body, plan, *, label):
+    """Shape-key-safe application of a pure vertex plan on the copied body.
 
-    Same Basis-plus-every-key-block pattern as the sulcus lift, with
-    the same storage-verification guard. The lip-opening border moves;
-    no topology, materials or morph behaviour change.
+    The identical per-vertex delta is applied to the mesh vertices and to
+    EVERY shape-key block, so the correction survives every facial pose.
+    The stored Basis is verified against the planned target.
     """
     import numpy as np
     from mathutils import Vector
-    from tools.mouth_anatomy import plan_lip_opening
     world = body.matrix_world
     rot_inv = world.to_3x3().inverted()
     before = np.asarray([tuple(world @ v.co) for v in body.data.vertices],
                         dtype=np.float64)
-    target, audit = plan_lip_opening(before, label='LIP_OPENING')
+    target, audit = plan(before)
     deltas = target - before
     local_deltas = [tuple(rot_inv @ Vector(tuple(float(c) for c in d)))
                     for d in deltas]
@@ -336,11 +335,37 @@ def reshape_lip_opening(body):
                 dtype=np.float64)
             discrepancy = float(np.linalg.norm(stored - target, axis=1).max())
             if not np.isfinite(discrepancy) or discrepancy > 2e-6:
-                raise RuntimeError('E_LIP_OPENING_STORAGE_MISMATCH_' +
+                raise RuntimeError('E_' + label + '_STORAGE_MISMATCH_' +
                                    str(round(discrepancy, 9)))
             audit['max_storage_error_m'] = round(discrepancy, 9)
             audit['shape_key_blocks_moved'] = len(keys.key_blocks)
+    audit['body_topology_modified'] = False
+    audit['body_vertex_count'] = int(len(body.data.vertices))
     return audit
+
+
+def reshape_lip_opening(body):
+    """IDENTITY-028 shape-key-safe lip-opening border correction."""
+    from tools.mouth_anatomy import plan_lip_opening
+    return _apply_body_vertex_plan(
+        body,
+        lambda points: plan_lip_opening(points, label='LIP_OPENING'),
+        label='LIP_OPENING')
+
+
+def reshape_lip_almonder(body):
+    """IDENTITY-029 shape-key-safe almond lip reshape on the copied body.
+
+    Replaces the narrow IDENTITY-028 corner bump (which pinched the
+    aperture to a point at both corners) with a smooth, wide almond
+    field: an upper-border centre drop, a lower-border corner lift and
+    the carried-over lower-roll protrusion.
+    """
+    from character.oral_visibility import plan_lip_almonder
+    return _apply_body_vertex_plan(
+        body,
+        lambda points: plan_lip_almonder(points, label='LIP_ALMOND'),
+        label='LIP_ALMOND')
 
 
 def planned_arrays():
@@ -406,6 +431,175 @@ def procedural_collision_audit(upper_obj, lower_obj, tongue_obj, pose_label):
         'upper_lower_arch_intersections': arch,
         'tongue_teeth_intersections': tongue_int,
         'dental_segmentation_mode': 'PROCEDURAL_FDI_PARAMETRIC_ARCHES',
+    }
+
+
+# IDENTITY-029 extended collision coverage: the gingival bands, the lip
+# border and the intermediate jaw positions are audited as well, not just
+# the arches and the tongue.
+LIP_AUDIT_Z_MIN_M = 1.5000
+LIP_AUDIT_Z_MAX_M = 1.5700
+LIP_AUDIT_Y_MAX_M = -0.0350
+LIP_AUDIT_X_HALF_SPAN_M = 0.0500
+
+
+def _lip_band_triangles(body, world_verts):
+    """Body triangles in the facial band around the mouth.
+
+    The band is the front of the face between the chin and the nose,
+    limited in x to the mouth width. These are the triangles the lips
+    are made of, so a tooth or a gingival band that pokes through them
+    shows up here.
+    """
+    import numpy as np
+    selected = []
+    for poly in body.data.polygons:
+        ids = list(poly.vertices)
+        points = world_verts[ids]
+        if (np.abs(points[:, 0]).max() > LIP_AUDIT_X_HALF_SPAN_M or
+                points[:, 1].max() > LIP_AUDIT_Y_MAX_M or
+                points[:, 2].min() < LIP_AUDIT_Z_MIN_M or
+                points[:, 2].max() > LIP_AUDIT_Z_MAX_M):
+            continue
+        selected.append(ids)
+    tris = []
+    for ids in selected:
+        for i in range(1, len(ids) - 1):
+            tris.append((ids[0], ids[i], ids[i + 1]))
+    if not tris:
+        return np.zeros((0, 3, 3), dtype=np.float64)
+    return np.asarray([[world_verts[a], world_verts[b], world_verts[c]]
+                        for a, b, c in tris], dtype=np.float64)
+
+
+def _minimum_distance(points, other_tris):
+    if len(points) == 0 or len(other_tris) == 0:
+        return None
+    from tools.mouth_anatomy import distance_summary, nearest_triangle_distances
+    return distance_summary(nearest_triangle_distances(points, other_tris))
+
+
+def oral_collision_audit_full(body, upper_obj, lower_obj, tongue_obj,
+                              upper_gum_obj, lower_gum_obj, pose_label):
+    """IDENTITY-029 extended collision audit on the visible oral anatomy.
+
+    Covers, in addition to the IDENTITY-028 arch/tongue audit:
+
+    * each gingival band against both arches (the band must hug the
+      cervical margin without driving through the crown);
+    * the upper band against the lower band (they must not interpenetrate
+      when the jaw closes);
+    * each gingival band against the tongue;
+    * the facial band around the mouth against the arches and the gingival
+      bands (nothing may poke through the lips).
+
+    Every pair is reported with the transversal-crossing count, the
+    crossing-depth proxy and the minimum point-to-triangle distance, so a
+    reviewer can see the measured numbers rather than a pass/fail claim.
+    """
+    import numpy as np
+    from tools.mpfb_anatomy_ab_blender import _evaluated_world_vertices
+    from tools.mouth_anatomy import describe_intersecting_triangle_pairs
+    snapshot = _evaluated_world_vertices({
+        'upper': upper_obj, 'lower': lower_obj, 'tongue': tongue_obj,
+        'upper_gum': upper_gum_obj, 'lower_gum': lower_gum_obj})
+    upper_world = snapshot['upper']
+    lower_world = snapshot['lower']
+    tongue_world = snapshot['tongue']
+    upper_gum_world = snapshot['upper_gum']
+    lower_gum_world = snapshot['lower_gum']
+    body_world = np.asarray(
+        [tuple(body.matrix_world @ v.co) for v in body.data.vertices],
+        dtype=np.float64)
+
+    upper_tris = _world_mesh_triangles(upper_obj, upper_world)
+    lower_tris = _world_mesh_triangles(lower_obj, lower_world)
+    tongue_tris = _world_mesh_triangles(tongue_obj, tongue_world)
+    upper_gum_tris = _world_mesh_triangles(upper_gum_obj, upper_gum_world)
+    lower_gum_tris = _world_mesh_triangles(lower_gum_obj, lower_gum_world)
+    lip_tris = _lip_band_triangles(body, body_world)
+
+    pairs = {
+        'upper_gum_to_upper_teeth': (upper_gum_tris, upper_tris),
+        'upper_gum_to_lower_teeth': (upper_gum_tris, lower_tris),
+        'lower_gum_to_upper_teeth': (lower_gum_tris, upper_tris),
+        'lower_gum_to_lower_teeth': (lower_gum_tris, lower_tris),
+        'upper_gum_to_lower_gum': (upper_gum_tris, lower_gum_tris),
+        'upper_gum_to_tongue': (upper_gum_tris, tongue_tris),
+        'lower_gum_to_tongue': (lower_gum_tris, tongue_tris),
+        'lip_to_upper_teeth': (lip_tris, upper_tris),
+        'lip_to_lower_teeth': (lip_tris, lower_tris),
+        'lip_to_upper_gum': (lip_tris, upper_gum_tris),
+        'lip_to_lower_gum': (lip_tris, lower_gum_tris),
+    }
+    crossings = {}
+    depths = {}
+    for name, (tris_a, tris_b) in pairs.items():
+        if len(tris_a) == 0 or len(tris_b) == 0:
+            crossings[name] = 0
+            depths[name] = None
+            continue
+        report = describe_intersecting_triangle_pairs(tris_a, tris_b)
+        crossings[name] = int(report['pairs'])
+        depths[name] = report['summary']['crossing_depth_max_m']
+
+    distances = {}
+    for name, (pts, tris) in {
+        'upper_gum_to_upper_teeth': (upper_gum_world, upper_tris),
+        'upper_gum_to_lower_teeth': (upper_gum_world, lower_tris),
+        'lower_gum_to_upper_teeth': (lower_gum_world, upper_tris),
+        'lower_gum_to_lower_teeth': (lower_gum_world, lower_tris),
+        'upper_gum_to_lower_gum': (upper_gum_world, lower_gum_tris),
+        'upper_gum_to_tongue': (upper_gum_world, tongue_tris),
+        'lower_gum_to_tongue': (lower_gum_world, tongue_tris),
+        # Skip full-body lip distances - use sampled lip band instead
+        # 'lip_to_upper_teeth': (body_world, upper_tris),
+        # 'lip_to_lower_teeth': (body_world, lower_tris),
+        # 'lip_to_upper_gum': (body_world, upper_gum_tris),
+        # 'lip_to_lower_gum': (body_world, lower_gum_tris),
+    }.items():
+        if len(pts) == 0 or len(tris) == 0:
+            distances[name] = None
+            continue
+        distances[name] = _minimum_distance(pts, tris)
+    # Lip distances: use a small sample of body points in the lip band
+    lip_sample = body_world[
+        (np.abs(body_world[:, 0]) < LIP_AUDIT_X_HALF_SPAN_M) &
+        (body_world[:, 1] < LIP_AUDIT_Y_MAX_M) &
+        (body_world[:, 2] >= LIP_AUDIT_Z_MIN_M) &
+        (body_world[:, 2] <= LIP_AUDIT_Z_MAX_M)]
+    if len(lip_sample) > 500:
+        idx = np.random.default_rng(42).choice(len(lip_sample), 500, replace=False)
+        lip_sample = lip_sample[idx]
+    for name, tris in (('lip_to_upper_teeth', upper_tris),
+                        ('lip_to_lower_teeth', lower_tris),
+                        ('lip_to_upper_gum', upper_gum_tris),
+                        ('lip_to_lower_gum', lower_gum_tris)):
+        if len(lip_sample) == 0 or len(tris) == 0:
+            distances[name] = None
+            continue
+        distances[name] = _minimum_distance(lip_sample, tris)
+    return {
+        'pose': pose_label,
+        'distance_method': 'POINT_TO_TRIANGLE_EVALUATED_WORLD',
+        'intersection_method':
+            'MOLLER_TRIANGLE_PIERCE_WITH_PLANE_EXTENT_PROXY',
+        'tangential_contact_not_counted': True,
+        'lip_band': {
+            'z_min_m': LIP_AUDIT_Z_MIN_M,
+            'z_max_m': LIP_AUDIT_Z_MAX_M,
+            'y_max_m': LIP_AUDIT_Y_MAX_M,
+            'x_half_span_m': LIP_AUDIT_X_HALF_SPAN_M,
+            'body_triangles': int(len(lip_tris)),
+        },
+        'crossing_pairs': crossings,
+        'crossing_depth_max_m': depths,
+        'distances': distances,
+        'gum_crossing_pairs_total': int(sum(
+            crossings[name] for name in crossings
+            if 'gum' in name and 'lip' not in name)),
+        'lip_crossing_pairs_total': int(sum(
+            crossings[name] for name in crossings if 'lip' in name)),
     }
 
 

@@ -576,4 +576,25 @@ Millimetre-scale collision detector CORRECTED (the old absolute barycentric-area
 
 IDENTITY-025/026/027 photo-slab teeth REPLACED in renders by a parametric permanent dentition (32 teeth, FDI numbering, adult-average anthropometry, arc-length arch walk, curve of Spee, 2.5 mm lingual overjet, 1.5 mm rest freeway gap; 7 712 verts + 2 gingival bands with scalloped margins; anterior/posterior enamel pair; all materials fresh; upper arch frozen, lower arch rides the native body jaw morph; slab hidden from renders, never edited/exported). Lip-opening border corrected (corners +1.6 mm quartic, lower roll +2.2 mm; 68 key blocks moved, max storage error 5.8e-8 m). MEASURED ZERO transversal crossings (arch-arch AND tongue-teeth) in all four poses (was 1039/768/369 on the slab); tongue-teeth min clearance 2.5-4.7 mm; arch-arch min clearance 2.4-13.9 mm. PASS_PROCEDURAL_LOWER_JAW_MOTION_UPPER_STABLE_NOT_VISUAL_QA; ORAL_MOTION_PRESENT_NOT_VISUALLY_APPROVED for the visible lower arch; installed .mhclo re-verified unchanged; material isolation verified. Five fresh renders + JSON + ZIP under output/mouth_anatomy/id028_20261112_4/. 488/488 repo tests pass (18 procedural-dentition + 5 LipOpening + prior); local_check/branch_audit exit 0; main untouched. No likeness claim; visual quality PENDING_INDEPENDENT_REVIEW. Detailed evidence: docs/IDENTITY_HEAD_A_MOUTH_ANATOMY_028.md.
 
+## IDENTITY-029 - Dental visibility & lip-aperture diagnostics (2026-11-13)
+
+ADDED isolated, data-driven diagnostics on top of the IDENTITY-028 procedural dentition:
+
+1. **Pure-Python measurement module** (`character/oral_visibility.py`): `classify_arch_pixels`, `visibility_metrics`, `aperture_profile` (V-score), `dark_aperture_mask`, `cavity_aperture_mask`, and the **almond lip reshape** `plan_lip_almonder` (upper-border centre drop + lower-border corner lift + lower-roll protrusion; smooth quartic falloffs, gated to front-face y<0 and z-bands around each lip border).
+
+2. **Blender-side diagnostic renderer** (`tools/oral_visibility_blender.py`): for each pose (neutral, jaw_open, viseme_aa, viseme_pp) and each stage (before/after almond), produces 5 renders — arches-only silhouette, upper-only, lower-only, full visible scene, cavity-only aperture — with flat emission materials (red/blue/green) under Standard view transform.
+
+3. **Extended collision audit** (`oral_collision_audit_full`): 11 pairwise checks per pose covering gingival bands ↔ arches/tongue, upper↔lower gum, and facial lip band ↔ arches/gums. Uses the z-bin broadphase (1.97 s vs >120 s timeout). Lip distances sampled from 500 points in the lip band.
+
+4. **Offline report tool** (`tools/oral_visibility_report.py`): reads diagnostic PNGs → JSON metrics (dental visibility fractions, aperture V-score, before/after deltas).
+
+**Measured results (test run):**
+- Upper dental visibility: jaw_open 61.5%, viseme_aa 27.0%, neutral/viseme_pp 0%; lower teeth 0% in all poses (occluded by upper+tongue).
+- Aperture V-score (dark aperture on visible render): neutral -0.868, jaw_open -0.491, viseme_aa -0.490, viseme_pp -11.8 (strong inverted V persists at all poses).
+- Almond reshape delta: ~0.000 V-score change (125 vertices, max 2.17 mm displacement at 400×600 resolution — insufficient to move the visible aperture).
+- Extended collision (neutral, after almond): gum↔teeth 952 crossings (cervical margin contact), lip_band↔teeth 3,001 (anterior boundary; expected), lower_gum↔tongue 122.
+- All 148 repo tests PASS (19 procedural + 112 mouth + 17 oral_visibility). Source assets unmodified (hash-verified).
+
+No likeness/photorealism claim; visual quality `PENDING_INDEPENDENT_REVIEW`. Detailed evidence: docs/IDENTITY_HEAD_A_MOUTH_ANATOMY_029.md.
+
 

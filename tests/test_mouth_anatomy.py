@@ -566,6 +566,93 @@ class IntersectionTests(unittest.TestCase):
                 self.tri_a, self.tri_a, aabb_margin=-1.0)
 
 
+class BroadphaseEquivalenceTests(unittest.TestCase):
+    """The z-bin broadphase must find EXACTLY the brute-force crossing set.
+
+    IDENTITY-029 replaced the original O(N*M) linear scan with a z-bin
+    hash to make the millimetre-scale audits (tens of thousands of
+    triangles) tractable. A faster broadphase that silently drops
+    crossings would invalidate every collision number in the report, so
+    the replacement is pinned against a brute-force reference over
+    randomized overlapping triangle sets.
+    """
+    @staticmethod
+    def _brute_force_count(A, B, margin=1e-6):
+        from tools.mouth_anatomy import _triangles_intersect
+        count = 0
+        for a in A:
+            amin = a.min(axis=0)
+            amax = a.max(axis=0)
+            for j, b in enumerate(B):
+                bmin = b.min(axis=0)
+                bmax = b.max(axis=0)
+                if (bmax[2] < amin[2] - margin or
+                        bmin[2] > amax[2] + margin or
+                        bmax[1] < amin[1] - margin or
+                        bmin[1] > amax[1] + margin or
+                        bmax[0] < amin[0] - margin or
+                        bmin[0] > amax[0] + margin):
+                    continue
+                if _triangles_intersect(a[0], a[1], a[2],
+                                        b[0], b[1], b[2]):
+                    count += 1
+        return count
+
+    def test_zbin_matches_brute_force_randomised(self):
+        rng = np.random.default_rng(20261113)
+        for trial in range(6):
+            n_a = 30 + trial * 9
+            n_b = 28 + trial * 11
+            A = np.empty((n_a, 3, 3))
+            B = np.empty((n_b, 3, 3))
+            for i in range(n_a):
+                cx = rng.uniform(-0.05, 0.05)
+                cy = rng.uniform(-0.05, 0.05)
+                cz = rng.uniform(-0.02, 0.02)
+                A[i] = np.array([
+                    [cx - 0.01, cy - 0.01, cz],
+                    [cx + 0.01, cy - 0.01, cz + rng.uniform(-0.01, 0.01)],
+                    [cx, cy + 0.01, cz + rng.uniform(-0.01, 0.01)]])
+            for i in range(n_b):
+                cx = rng.uniform(-0.05, 0.05)
+                cy = rng.uniform(-0.05, 0.05)
+                cz = rng.uniform(-0.02, 0.02)
+                B[i] = np.array([
+                    [cx - 0.008, cy - 0.008, cz + rng.uniform(-0.01, 0.01)],
+                    [cx + 0.008, cy - 0.008, cz],
+                    [cx, cy + 0.008, cz + rng.uniform(-0.01, 0.01)]])
+            brute = self._brute_force_count(A, B)
+            fast = count_intersecting_triangle_pairs(A, B)['pairs']
+            self.assertEqual(fast, brute,
+                             'trial %d: zbin=%d brute=%d' % (trial, fast, brute))
+
+    def test_describe_and_count_agree_after_broadphase_change(self):
+        rng = np.random.default_rng(4242)
+        A = np.empty((60, 3, 3))
+        B = np.empty((55, 3, 3))
+        for i in range(len(A)):
+            c = rng.uniform(-0.04, 0.04, 3)
+            A[i] = np.array([c + rng.uniform(-0.01, 0.01, 3) for _ in range(3)])
+        for i in range(len(B)):
+            c = rng.uniform(-0.04, 0.04, 3)
+            B[i] = np.array([c + rng.uniform(-0.01, 0.01, 3) for _ in range(3)])
+        counted = count_intersecting_triangle_pairs(A, B)['pairs']
+        described = describe_intersecting_triangle_pairs(A, B)['pairs']
+        self.assertEqual(counted, described)
+
+    def test_zbin_handles_degenerate_z_span(self):
+        # all triangles in one z plane -> the grid must still find hits
+        A = np.array([[[-1.0, 1.0, 0.0], [1.0, 1.0, 0.0],
+                       [0.0, -1.0, 0.0]]])
+        B = np.array([[[0.0, 0.0, -1.0], [0.0, 0.6, 1.0],
+                       [0.0, -0.6, 1.0]]])
+        self.assertEqual(count_intersecting_triangle_pairs(A, B)['pairs'], 1)
+        flat_a = np.repeat(A, 3, axis=0)
+        flat_b = np.repeat(B, 3, axis=0)
+        self.assertEqual(count_intersecting_triangle_pairs(flat_a, flat_b)['pairs'],
+                         9)
+
+
 class DescribeCrossingTests(unittest.TestCase):
     def setUp(self):
         self.tri_a = np.array([[[-1.0, 1.0, 0.0], [1.0, 1.0, 0.0],

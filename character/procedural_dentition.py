@@ -98,8 +98,8 @@ REST_GAP_M = 0.0015  # vertical freeway gap at the incisal edge, closed pose
 MAX_HALF_WIDTH_M = 0.045
 MIN_ARCH_FRONT_Y_M = -0.200
 MAX_ARCH_BACK_Y_M = -0.075
-N_THETA = 40
-OCCLUSAL_RADII = (0.0, 0.20, 0.40, 0.58, 0.74, 0.86, 0.94, 1.0)
+N_THETA = 48
+OCCLUSAL_RADII = (0.0, 0.15, 0.30, 0.45, 0.60, 0.75, 0.85, 0.92, 1.0)
 GUM_SAMPLES = 96
 GUM_INNER_PULL_M = 0.0012      # inner edge sits a hair behind the neck waist
 GUM_POSTERIOR_OPEN_M = 0.0120   # skirt retreats toward the throat axis
@@ -108,6 +108,7 @@ GUM_SKIRT_HEIGHT_M = 0.0055     # vertical extent beyond the neck
 GUM_RIM_HEIGHT_M = 0.0012       # extra z lift of the rim (upper) / drop (lower)
 INTER_TOOTH_GAP_M = 0.0004      # sub-mm gap so crowns separate in renders
 GINGIVA_SCALLOP_M = 0.0018      # gingival margin arc amplitude at contacts
+GUM_FREE_MARGIN_DROP_M = 0.0015 # free gingival margin apical to CEJ
 
 ANGLE_BUC = 0.0        # buccal azimuth (tooth local)
 ANGLE_FOUR = (0.38, math.pi - 0.38, math.pi + 0.38, 2 * math.pi - 0.38)
@@ -173,20 +174,45 @@ def cusp_field(cls, theta):
     1 at a cusp tip, 0 in the occlusal grooves. Angles measured in the
     tooth local frame; theta=0 is buccal.
     """
-    if cls == 'central' or cls == 'lateral':
-        # gentle incisal saddle: slightly tips down toward the midline
-        return float(np.clip(0.5 + 0.5 * math.cos(theta - math.pi / 2), 0.0, 1.0)) * 0.25
+    if cls == 'central':
+        # Incisors: three mamelons on the incisal edge (mesial, central, distal)
+        # plus a subtle lingual cingulum
+        mamelon = 0.3 * np.exp(-(_ang_dist(theta, math.pi/2) / 0.35) ** 2)  # central mamelon
+        mamelon += 0.25 * np.exp(-(_ang_dist(theta, math.pi/2 - 0.7) / 0.25) ** 2)  # mesial
+        mamelon += 0.25 * np.exp(-(_ang_dist(theta, math.pi/2 + 0.7) / 0.25) ** 2)  # distal
+        cingulum = 0.15 * np.exp(-(_ang_dist(theta, 3*math.pi/2) / 0.5) ** 2)  # lingual cingulum
+        return float(np.clip(mamelon + cingulum, 0.0, 1.0))
+    if cls == 'lateral':
+        # Lateral incisors: two mamelons, more pronounced cingulum
+        mamelon = 0.3 * np.exp(-(_ang_dist(theta, math.pi/2 - 0.5) / 0.3) ** 2)
+        mamelon += 0.3 * np.exp(-(_ang_dist(theta, math.pi/2 + 0.5) / 0.3) ** 2)
+        cingulum = 0.2 * np.exp(-(_ang_dist(theta, 3*math.pi/2) / 0.5) ** 2)
+        return float(np.clip(mamelon + cingulum, 0.0, 1.0))
     if cls == 'canine':
-        return float(np.exp(-(_ang_dist(theta, ANGLE_BUC) / 0.85) ** 2))
+        # Canine: single prominent buccal cusp, subtle lingual ridge
+        buccal = np.exp(-(_ang_dist(theta, 0.0) / 0.6) ** 2)
+        lingual_ridge = 0.3 * np.exp(-(_ang_dist(theta, math.pi) / 0.7) ** 2)
+        return float(np.clip(buccal + lingual_ridge, 0.0, 1.0))
     if cls == 'premolar1' or cls == 'premolar2':
-        buccal = np.exp(-(_ang_dist(theta, 0.0) / 1.0) ** 2)
-        lingual = np.exp(-(_ang_dist(theta, math.pi) / 1.0) ** 2) * 0.78
-        return float(np.clip(buccal + lingual, 0.0, 1.0))
+        # Premolars: buccal and lingual cusps, buccal larger
+        buccal = np.exp(-(_ang_dist(theta, 0.0) / 0.55) ** 2)
+        lingual = np.exp(-(_ang_dist(theta, math.pi) / 0.65) ** 2) * 0.85
+        # Mesial/distal marginal ridges
+        marginal = 0.25 * (np.exp(-(_ang_dist(theta, math.pi/2) / 0.4) ** 2) +
+                           np.exp(-(_ang_dist(theta, 3*math.pi/2) / 0.4) ** 2))
+        return float(np.clip(buccal + lingual + marginal, 0.0, 1.0))
     if cls in ('molar1', 'molar2', 'molar3'):
+        # Molars: 4-5 cusps (MB, DB, ML, DL, +distal for M1/M2)
         total = 0.0
         for k, angle in enumerate(ANGLE_FOUR):
-            amp = 1.0 if angle in (ANGLE_FOUR[0], ANGLE_FOUR[3]) else 0.82
-            total += amp * np.exp(-(_ang_dist(theta, angle) / 0.72) ** 2)
+            amp = 1.0 if angle in (ANGLE_FOUR[0], ANGLE_FOUR[3]) else 0.88  # buccal cusps larger
+            total += amp * np.exp(-(_ang_dist(theta, angle) / 0.6) ** 2)
+        # Fifth cusp (distal) for M1/M2
+        if cls in ('molar1', 'molar2'):
+            total += 0.6 * np.exp(-(_ang_dist(theta, math.pi/2) / 0.45) ** 2)
+        # Marginal ridges
+        total += 0.2 * (np.exp(-(_ang_dist(theta, math.pi/2) / 0.35) ** 2) +
+                        np.exp(-(_ang_dist(theta, 3*math.pi/2) / 0.35) ** 2))
         return float(np.clip(total, 0.0, 1.0))
     raise DentitionError('E_CUSP_CLASS_' + str(cls))
 
@@ -247,12 +273,14 @@ def build_tooth(cls, *, upper, metrics=None):
     # boundary ring index (r = 1.0) is the outermost occlusal ring
     boundary_start = 1 + (len(radial_levels) - 1) * N_THETA
     # -- wall rings: from the occlusal boundary down to the neck ----------
-    # crown profile: slight flare out of the tip, mid bulge, neck waist
+    # crown profile: slight flare at cervical third, maximum convexity at
+    # middle third, cervical constriction at neck. More organic curves.
     wall_specs = (
-        (1.05, 0.80),   # just below the occlusal boundary
-        (1.08, 0.62),   # mid bulge
-        (1.04, 0.45),
-        (0.98, 0.26),
+        (1.03, 0.85),   # just below occlusal - slight flare
+        (1.06, 0.70),   # cervical third - beginning of convexity
+        (1.09, 0.52),   # middle third - maximum convexity (cervical bulge)
+        (1.04, 0.35),   # gingival third - tapering
+        (0.95, 0.18),   # near neck - cervical constriction
         (0.88, 0.0),    # neck
     )
     wall_rings = []
@@ -446,14 +474,46 @@ def _neck_z(arch, cls, x_world, *, params):
     return cz - sign * h
 
 
+def arch_tooth_at(arch, x_world, *, params=None):
+    """Tooth record and mesiodistal parameter ``u`` covering ``x_world``.
+
+    The lookup walks the SAME arc-length layout that ``place_arch`` used,
+    so the gingival band always tracks the tooth it actually sits under
+    (a nearest-x lookup would pick a different class near the class
+    boundaries and place the margin at the wrong cervical height).
+    ``u`` runs 0..1 across the mesiodistal span of the tooth.
+    """
+    params = _check_params(params or ARCH_PARAMS)
+    arch_l = arch.lower()
+    if arch_l not in ('upper', 'lower'):
+        raise DentitionError('E_ARCH_TOOTH_ARCH_' + str(arch))
+    p = params[arch_l]
+    placements = place_arch(arch_l, params=params)
+    walk = _arc_walk(p['y_front'], p['y_back'], p['half_width'])
+    x_abs = min(abs(float(x_world)), p['half_width'])
+    arc_x = float(np.interp(x_abs, walk[0], walk[1]))
+    side = 'right' if float(x_world) >= 0.0 else 'left'
+    side_teeth = [pl for pl in placements if pl['side'] == side]
+    cursor = INTER_TOOTH_GAP_M / 2.0
+    for index, pl in enumerate(side_teeth):
+        start, end = cursor, cursor + pl['width_m']
+        if arc_x <= end or index == len(side_teeth) - 1:
+            u = float(np.clip((arc_x - start) / pl['width_m'], 0.0, 1.0))
+            return pl, u
+        cursor = end + INTER_TOOTH_GAP_M
+    return side_teeth[0], 0.0
+
+
 def gum_band(arch, *, params=None):
     """Horseshoe gingival band embracing the necks of the built teeth.
 
-    Built as a 3-ring strip following the same arch curve as the teeth:
-    an inner ring tucked a hair behind the neck waist, a skirt ring
-    pushed outward and lifted (upper arch) or dropped (lower arch), and
-    a curled rim. The ends taper toward the throat. Returns ``(verts,
-    faces)``; materials are the caller's concern.
+    Built as a 4-ring strip following the same arch curve as the teeth:
+    ring 0 is the cervical margin (CEJ) sitting exactly on the tooth neck,
+    ring 1 the free gingival margin just apical to it, ring 2 the
+    attached-gingiva skirt and ring 3 the deeper rim. The skirt and rim
+    retreat POSTERIORLY into the mouth corridor so the band can never
+    project in front of the lip plane. Returns ``(verts, faces)``;
+    materials are the caller's concern.
     """
     params = _check_params(params or ARCH_PARAMS)
     arch_l = arch.lower()
@@ -500,37 +560,39 @@ def gum_band(arch, *, params=None):
         # contact areas (papilla), with the amplitude from GINGIVA_SCALLOP_M
         scallop = GINGIVA_SCALLOP_M * ((2.0 * u - 1.0) ** 2)
         offset = np.array([normal[0], normal[1], 0.0])
-        # inner edge lives BEYOND the tooth cap plane (outside the tooth
-        # bounding box in z) so it can never knife through a crown
-        p_in = np.array([x_f, y, 0.0]) - offset * (depth_half + GUM_INNER_PULL_M)
-        p_in[2] = nz + sign * 0.0012 - sign * scallop
-        # skirt and rim retreat POSTERIORLY into the mouth corridor
-        # (never forward past the lip plane, never into the chin)
+        # Ring 0: cervical margin (CEJ) - inner edge at the neck
+        p_cej = np.array([x_f, y, 0.0]) - offset * (depth_half + GUM_INNER_PULL_M)
+        p_cej[2] = nz - sign * scallop
+        # Ring 1: free gingival margin - slightly apical to CEJ
+        p_free = np.array([x_f, y, 0.0]) - offset * (depth_half + GUM_INNER_PULL_M)
+        p_free[2] = nz - sign * (GUM_FREE_MARGIN_DROP_M + scallop)
+        # Ring 2: attached gingiva / skirt - retreats POSTERIORLY
         p_skirt = np.array([x_f, y + GUM_POSTERIOR_OPEN_M, 0.0])
         p_skirt[2] = nz + sign * GUM_SKIRT_HEIGHT_M
+        # Ring 3: rim - retreats deeper
         p_rim = np.array([x_f, y + GUM_POSTERIOR_OPEN_M + GUM_POSTERIOR_RIM_M, 0.0])
         p_rim[2] = nz + sign * (GUM_SKIRT_HEIGHT_M + GUM_RIM_HEIGHT_M)
-        rows.append((p_in, p_skirt, p_rim))
+        rows.append((p_cej, p_free, p_skirt, p_rim))
     # row-major layout: vertex (ring, j) at ring*N + j
-    verts = np.empty((3 * N, 3), dtype=np.float64)
-    for ring in range(3):
+    verts = np.empty((4 * N, 3), dtype=np.float64)
+    for ring in range(4):
         for j in range(N):
             verts[ring * N + j] = rows[j][ring]
     faces = []
     for j in range(N - 1):
-        for ring in range(2):
+        for ring in range(3):
             s0 = ring * N + j
             s1 = ring * N + j + 1
             nxt = (ring + 1) * N + j
             nxt1 = (ring + 1) * N + j + 1
+            # two triangles per quad
             faces.append((s0, nxt, nxt1))
             faces.append((s0, nxt1, s1))
-    # posterior end caps of the horseshoe
+    # posterior end caps of the horseshoe - triangulate quads
     for j in (0, N - 1):
         faces.append((j, N + j, 2 * N + j))
+        faces.append((j, 2 * N + j, 3 * N + j))
     faces_arr = np.asarray(faces, dtype=np.int64)
-    if faces_arr.min() < 0 or faces_arr.max() >= len(verts):
-        raise DentitionError('E_GUM_FACE_RANGE')
     if upper_flag:
         faces_arr = faces_arr[:, [0, 2, 1]]
     return verts, faces_arr
